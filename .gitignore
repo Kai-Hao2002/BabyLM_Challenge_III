@@ -1,0 +1,11 @@
+# Python 相關
+__pycache__/
+*.py[cod]
+.venv/
+.DS_Store
+.cache/
+
+# 數據與權重 (如果太大，不要推送到 Git)
+data/
+results/*.pth
+results/*.bin
