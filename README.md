@@ -55,9 +55,11 @@ This repository contains the implementation for the 2026 BabyLM Challenge, Multi
 Create a virtual environment locally or on the LRZ cluster, then install the required dependencies:
 
 ```bash
-python -m venv venv
-source venv/bin/activate
+conda create -n babylm python=3.10 -y
+conda activate babylm
+pip install --upgrade pip
 pip install -r requirements.txt
+python -m ipykernel install --user --name=babylm --display-name "Python (babylm_conda)"
 ```
 
 If you haven't initialized the evaluation module, load the babylm-eval submodule:
