@@ -62,6 +62,16 @@ pip install -r requirements.txt
 python -m ipykernel install --user --name=babylm --display-name "Python (babylm_conda)"
 ```
 
+download raw dataset
+```bash
+python src/data_pipeline/download.py    
+```
+
+data clean and mix, change TOTAL_BUDGET if necessary
+```bash
+python src/data_pipeline/clean_and_mix.py
+```
+
 If you haven't initialized the evaluation module, load the babylm-eval submodule:
 
 ```bash
