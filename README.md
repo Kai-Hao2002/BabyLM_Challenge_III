@@ -67,7 +67,17 @@ download raw dataset
 python src/data_pipeline/download.py    
 ```
 
-data clean and mix, change TOTAL_BUDGET if necessary
+step 1: data clean and mix, ensuring GLOBAL_TOKENIZER = None and change TOTAL_BUDGET if necessary
+```bash
+python src/data_pipeline/clean_and_mix.py
+```
+
+step 2: Train Custom BPE Tokenizer
+```bash
+python src/data_pipeline/train_tokenizer.py
+```
+
+step 3: generate final dataset,GLOBAL_TOKENIZER=Tokenizer_100M_official.json
 ```bash
 python src/data_pipeline/clean_and_mix.py
 ```
