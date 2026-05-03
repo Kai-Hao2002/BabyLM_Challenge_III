@@ -14,7 +14,6 @@ except Exception:
     GLOBAL_TOKENIZER = None
     logging.warning("Custom Tokenizer not detected, falling back to approximation.")
 
-
 #GLOBAL_TOKENIZER = None
 
 def deep_quality_filter(example, lang):
@@ -175,14 +174,26 @@ def main():
 
     # 3. Define staged curriculum ratios
     curriculum = {
-        "Stage_1_Foundation": {'eng': 0.50, 'zho': 0.25, 'nld': 0.25},
-        "Stage_2_Alignment": {'eng': 0.33, 'zho': 0.33, 'nld': 0.34},
-        "Stage_3_HardBoosting": {'eng': 0.20, 'zho': 0.40, 'nld': 0.40}
+        "Stage_1_Foundation": {
+            'budget_ratio': 0.30, 
+            'lang_ratios': {'eng': 0.50, 'zho': 0.25, 'nld': 0.25}
+        },
+        "Stage_2_Alignment": {
+            'budget_ratio': 0.30, 
+            'lang_ratios': {'eng': 0.33, 'zho': 0.33, 'nld': 0.34}
+        },
+        "Stage_3_HardBoosting": {
+            'budget_ratio': 0.40, 
+            'lang_ratios': {'eng': 0.20, 'zho': 0.40, 'nld': 0.40}
+        }
     }
 
     # 4. Generate Mixed Data
-    for stage, ratios in curriculum.items():
-        prepare_stage_data(datasets, stage, ratios, TOTAL_BUDGET)
+    for stage, config in curriculum.items():
+        stage_budget = TOTAL_BUDGET * config['budget_ratio']
+        logging.info(f"\n {stage} budget is : {int(stage_budget):,} Tokens")
+
+        prepare_stage_data(datasets, stage, config['lang_ratios'], stage_budget)
 
 if __name__ == "__main__":
     main()
