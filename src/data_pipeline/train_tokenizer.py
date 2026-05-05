@@ -30,7 +30,11 @@ def train_custom_tokenizer():
     # 3. Setup training parameters (Vocab size 32k)
     # 加入特殊 Token，這對後續 LLaMA-style 訓練很重要
     # Add special tokens, crucial for LLaMA-style training later
-    special_tokens = ["<unk>", "<s>", "</s>", "<pad>", "<mask>"]
+    zh_punctuation = [
+        "，", "。", "、", "！", "？", "：", "；", 
+        "「", "」", "（", "）", "《", "》", "【", "】"
+    ]
+    special_tokens = ["<unk>", "<s>", "</s>", "<pad>", "<mask>"] + zh_punctuation
     trainer = trainers.BpeTrainer(
         vocab_size=48000,
         special_tokens=special_tokens,
