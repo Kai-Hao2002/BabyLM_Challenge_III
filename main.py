@@ -15,6 +15,10 @@ import torch
 # from src.model.architecture import build_model
 # from src.training.dataset import get_dataloaders
 # from src.training.trainer import train_model
+from src.model.architecture import build_model
+from src.training.dataset import get_curriculum_dataloaders
+from src.training.trainer import train_model_curriculum
+from transformers import PreTrainedTokenizerFast
 
 def setup_logging(log_file):
     """Setup logging"""
@@ -72,15 +76,50 @@ def main():
         # logger.info("Step 1: Preparing data and tokenizer...")
         # data_path = prepare_data(config['data_args'])
         # tokenizer = load_or_train_tokenizer(config['tokenizer_args'], data_path)
-        
+        logger.info("Step 1: Loading tokenizer...")
+
+        tokenizer_path = config["tokenizer_path"]
+        tokenizer = PreTrainedTokenizerFast(
+            tokenizer_file=tokenizer_path,
+            unk_token="<unk>",
+            bos_token="<s>",
+            eos_token="</s>",
+            pad_token="<pad>",
+            mask_token="<mask>",
+        )
+
+        logger.info(f"Tokenizer vocab size: {tokenizer.vocab_size}")
         # --- Step 2: Model Initialization (Member B) ---
         # logger.info("Step 2: Initializing model...")
         # model = build_model(config['model_args'], vocab_size=tokenizer.vocab_size)
+        logger.info("Step 2: Building model...")
+
+        model = build_model(
+            vocab_size=tokenizer.vocab_size,
+            config_args=config["model_args"],
+        )
         
         # --- Step 3: Dataset & DataLoader (Member B) ---
         # logger.info("Step 3: Setting up Datasets and DataLoaders...")
         # train_loader, val_loader = get_dataloaders(config['data_args'], tokenizer)
-        
+        logger.info("Step 3: Setting up curriculum dataloaders...")
+
+        stage_loaders = get_curriculum_dataloaders(
+            curriculum_stages=config["data_args"]["curriculum_stages"],
+            tokenizer_path=tokenizer_path,
+            batch_size=config["training_args"]["batch_size"],
+            max_length=config["training_args"]["max_length"],
+            mlm_probability=config["training_args"].get("mlm_probability", 0.15),
+            val_ratio=config["data_args"].get("val_ratio", 0.1),
+            seed=config.get("seed", 42),
+        )
+
+        for stage in stage_loaders:
+            logger.info(
+                f"{stage['name']} | "
+                f"Train batches: {len(stage['train_loader'])} | "
+                f"Val batches: {len(stage['val_loader'])}"
+            )
         # --- Step 4: Training Loop (Member B) ---
         # logger.info("Step 4: Starting training...")
         # train_model(
@@ -89,9 +128,17 @@ def main():
         #     val_loader=val_loader, 
         #     config=config['training_args']
         # )
-        
-        logger.info("Pipeline execution simulation completed successfully! (Uncomment modules to run actual training)")
+        logger.info("Step 4: Starting training...")
 
+        train_model_curriculum(
+            model=model,
+            stage_loaders=stage_loaders,
+            tokenizer=tokenizer,
+            config=config["training_args"],
+        )
+
+        logger.info("Training completed successfully!")
+    
     except Exception as e:
         logger.error(f"An error occurred during execution: {e}")
         raise

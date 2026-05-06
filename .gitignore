@@ -1,11 +1,34 @@
-# Python 相關
+# Python
 __pycache__/
 *.py[cod]
+*.so
+
+# Virtual env
 .venv/
+env/
+venv/
+
+# macOS
 .DS_Store
+
+# Cache
 .cache/
 
-# 數據與權重 (如果太大，不要推送到 Git)
+# VSCode
+.vscode/
+
+# Dataset
 data/
-results/*.pth
-results/*.bin
+
+# Outputs / checkpoints
+outputs/
+checkpoints/
+
+# HuggingFace / model weights
+*.bin
+*.safetensors
+*.pth
+*.pt
+
+# Logs
+*.log

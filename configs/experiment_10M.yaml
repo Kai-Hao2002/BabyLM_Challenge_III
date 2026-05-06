@@ -1,0 +1,33 @@
+output_dir: outputs
+seed: 42
+
+tokenizer_path: tokenizers/tokenizer_10M.json
+
+data_args:
+  curriculum_stages:
+    - name: Stage_1_Foundation
+      path: data/processed_10M/Stage_1_Foundation
+    - name: Stage_2_Alignment
+      path: data/processed_10M/Stage_2_Alignment
+    - name: Stage_3_HardBoosting
+      path: data/processed_10M/Stage_3_HardBoosting
+  val_ratio: 0.1
+
+model_args:
+  hidden_size: 256
+  num_hidden_layers: 4
+  num_attention_heads: 4
+  intermediate_size: 1024
+  max_position_embeddings: 512
+  pad_token_id: 3
+
+training_args:
+  batch_size: 4
+  max_length: 128
+  mlm_probability: 0.15
+  learning_rate: 0.0005
+  max_epochs: 1
+  max_steps: 3200
+  eval_every_steps: 10
+  max_val_steps: 20
+  max_adjusted_token_exposure: 10000000

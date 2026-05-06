@@ -170,7 +170,8 @@ def main():
         logging.info(f"{lang.upper()} Clean Finished: {len(raw_ds['train'])} -> {len(cleaned_ds['train'])}")
 
     # 2. Define total budget (10M for prototyping, 100M for official)
-    TOTAL_BUDGET = 100_000_000  
+    # TOTAL_BUDGET = 100_000_000
+    TOTAL_BUDGET = 10_000_000
 
     # 3. Define staged curriculum ratios
     curriculum = {
