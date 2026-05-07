@@ -14,9 +14,9 @@ def batch_iterator(dataset, batch_size=10000):
 
 def train_custom_tokenizer():
     # 1. Load the mixed 10M V1 dataset
-    ds_stage1 = load_from_disk("data/processed_100M/Stage_1_Foundation")
-    ds_stage2 = load_from_disk("data/processed_100M/Stage_2_Alignment")
-    ds_stage3 = load_from_disk("data/processed_100M/Stage_3_HardBoosting")
+    ds_stage1 = load_from_disk("data/processed_10M/Stage_1_Foundation")
+    ds_stage2 = load_from_disk("data/processed_10M/Stage_2_Alignment")
+    ds_stage3 = load_from_disk("data/processed_10M/Stage_3_HardBoosting")
 
     
     dataset = concatenate_datasets([ds_stage1, ds_stage2, ds_stage3])
@@ -36,7 +36,7 @@ def train_custom_tokenizer():
     ]
     special_tokens = ["<unk>", "<s>", "</s>", "<pad>", "<mask>"] + zh_punctuation
     trainer = trainers.BpeTrainer(
-        vocab_size=48000,
+        vocab_size=18000, #16000~24000
         special_tokens=special_tokens,
         initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
         show_progress=True
@@ -51,7 +51,7 @@ def train_custom_tokenizer():
 
     # 6. Save Model
     os.makedirs("tokenizers", exist_ok=True)
-    save_path = "tokenizers/tokenizer_100M.json"
+    save_path = "tokenizers/tokenizer_10M.json"
     tokenizer.save(save_path)
     logging.info(f"✅ Tokenizer trained and saved to: {save_path}")
 

@@ -100,20 +100,14 @@ def get_dataloaders(
     batch_size=8,
     max_length=128,
     mlm_probability=0.15,
-    val_ratio=0.1,
+    #val_ratio=0.1,
     seed=42,
 ):
-    full_dataset = load_from_disk(dataset_path)
-
-    split_dataset = full_dataset.train_test_split(
-        test_size=val_ratio,
-        seed=seed,
-    )
+    split_dataset = load_from_disk(dataset_path)
 
     train_hf_dataset = split_dataset["train"]
-    val_hf_dataset = split_dataset["test"]
+    val_hf_dataset = split_dataset["validation"]
 
-    print(f"Full dataset rows: {len(full_dataset)}")
     print(f"Train rows: {len(train_hf_dataset)}")
     print(f"Validation rows: {len(val_hf_dataset)}")
 
@@ -153,7 +147,7 @@ def get_curriculum_dataloaders(
     batch_size=8,
     max_length=128,
     mlm_probability=0.15,
-    val_ratio=0.1,
+    #val_ratio=0.1,
     seed=42,
 ):
     stage_loaders = []
@@ -162,18 +156,12 @@ def get_curriculum_dataloaders(
         stage_name = stage["name"]
         dataset_path = stage["path"]
 
-        full_dataset = load_from_disk(dataset_path)
-
-        split_dataset = full_dataset.train_test_split(
-            test_size=val_ratio,
-            seed=seed,
-        )
+        split_dataset = load_from_disk(dataset_path)
 
         train_hf_dataset = split_dataset["train"]
-        val_hf_dataset = split_dataset["test"]
+        val_hf_dataset = split_dataset["validation"]
 
         print(f"\n[{stage_name}]")
-        print(f"Full rows: {len(full_dataset)}")
         print(f"Train rows: {len(train_hf_dataset)}")
         print(f"Validation rows: {len(val_hf_dataset)}")
 

@@ -9,7 +9,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 
 """
 try:
-    GLOBAL_TOKENIZER = Tokenizer.from_file("tokenizers/tokenizer_100M.json")
+    #GLOBAL_TOKENIZER = Tokenizer.from_file("tokenizers/tokenizer_10M.json")
+    GLOBAL_TOKENIZER = Tokenizer.from_file("tokenizers/tokenizer_10M.json")
 except Exception:
     GLOBAL_TOKENIZER = None
     logging.warning("Custom Tokenizer not detected, falling back to approximation.")
@@ -112,49 +113,69 @@ def get_exact_row_count_for_budget(dataset, target_budget, lang, tokenizer=GLOBA
     logging.warning(f"[{lang}] Warning: Reached end of dataset before hitting the target budget. Total tokens accumulated: {accumulated_tokens:,}")
     return len(dataset)
 
-def prepare_stage_data(datasets, stage_name, ratios, total_budget, output_base_dir="data"):
+from datasets import DatasetDict
+
+def prepare_stage_data(datasets, stage_name, ratios, total_budget, val_ratio, output_base_dir="data"):
     """
-    Create, sample, mix, shuffle, and save the dataset for a specific stage.
+    Create, sample, mix, shuffle, split train/val, and save the dataset for a specific stage.
     """
     logging.info(f"========== Preparing {stage_name} Data ==========")
-    stage_chunks = []
+    train_chunks = []
+    val_chunks = []
     
     for lang, ratio in ratios.items():
-        # 1. Calculate the target token budget for this language and adjust it by Byte Premium
+        # 1. 根據 Byte Premium 計算該語言的 Train Token 預算
         target_budget = total_budget * ratio
         actual_allowed_tokens = calculate_adjusted_tokens(target_budget, lang)
         
-        # 2. [Practical Conversion] Convert Token budget to Row count
         dataset_lang = datasets[lang]['train'] 
-        
-        # 為了避免每次都抽到開頭的文章，我們可以在抽取前先打亂該語言的資料集
         shuffled_lang_ds = dataset_lang.shuffle(seed=42) 
         
-        needed_rows = get_exact_row_count_for_budget(shuffled_lang_ds, actual_allowed_tokens, lang)
-        logging.info(f"[{lang}] Actual allowed tokens: {actual_allowed_tokens:,} -> Needed rows: {needed_rows:,}")
+        # 2. compute the exact number of rows needed to meet the adjusted token budget using the precise BPE-based calculation
+        needed_train_rows = get_exact_row_count_for_budget(shuffled_lang_ds, actual_allowed_tokens, lang)
         
-        # 3. Perform selection and add a language label column for later analysis
-        sampled_ds = shuffled_lang_ds.select(range(needed_rows))
+        # 3. decide val size based on the train size and val_ratio
+        needed_val_rows = int(needed_train_rows * val_ratio)
         
-        if "language" in sampled_ds.column_names:
-            sampled_ds = sampled_ds.remove_columns("language")
+        logging.info(f"[{lang}] Train tokens: {actual_allowed_tokens:,} -> Train rows: {needed_train_rows:,} | Val rows: {needed_val_rows:,}")
+        
+        # security check: if the needed rows exceed the dataset length, adjust the val size accordingly
+        if (needed_train_rows + needed_val_rows) > len(shuffled_lang_ds):
+            logging.warning(f"[{lang}] Not enough data for val! Reducing val size.")
+            needed_val_rows = len(shuffled_lang_ds) - needed_train_rows
+
+        # 4. spilt the dataset into train and val based on the calculated row counts
+        train_sampled = shuffled_lang_ds.select(range(needed_train_rows))
+        val_sampled = shuffled_lang_ds.select(range(needed_train_rows, needed_train_rows + needed_val_rows))
+        
+        # process the language column
+        if "language" in train_sampled.column_names:
+            train_sampled = train_sampled.remove_columns("language")
+            val_sampled = val_sampled.remove_columns("language")
             
-        # Add a language column to keep track of the source language (useful for later analysis)
-        sampled_ds = sampled_ds.add_column("language", [lang] * needed_rows)
-        stage_chunks.append(sampled_ds)
+        train_sampled = train_sampled.add_column("language", [lang] * len(train_sampled))
+        val_sampled = val_sampled.add_column("language", [lang] * len(val_sampled))
         
-    # 4. Mix and completely shuffle the combined dataset
-    mixed_dataset = concatenate_datasets(stage_chunks)
-    final_mixed_dataset = mixed_dataset.shuffle(seed=42)
+        train_chunks.append(train_sampled)
+        val_chunks.append(val_sampled)
+        
+    # 5. Mix, shuffle, and save the final dataset for this stage
+    mixed_train = concatenate_datasets(train_chunks).shuffle(seed=42)
+    mixed_val = concatenate_datasets(val_chunks).shuffle(seed=42)
     
-    # 5. Save to disk
+    # 6. Save the mixed dataset to disk for later training use
+    final_dataset = DatasetDict({
+        'train': mixed_train,
+        'validation': mixed_val
+    })
+    
     scale_folder = "processed_10M" if total_budget <= 10_000_000 else "processed_100M"
     save_path = os.path.join(output_base_dir, scale_folder, stage_name)
     
-    final_mixed_dataset.save_to_disk(save_path)
-    logging.info(f"✅ {stage_name} Mixed! {len(final_mixed_dataset):,} rows, saved to: {save_path}\n")
+    final_dataset.save_to_disk(save_path)
+    logging.info(f"✅ {stage_name} Mixed! Train: {len(mixed_train):,} rows, Val: {len(mixed_val):,} rows. Saved to: {save_path}\n")
     
-    return final_mixed_dataset
+    return final_dataset
 
 def main():
     langs = ['eng', 'zho', 'nld']
@@ -170,7 +191,7 @@ def main():
         logging.info(f"{lang.upper()} Clean Finished: {len(raw_ds['train'])} -> {len(cleaned_ds['train'])}")
 
     # 2. Define total budget (10M for prototyping, 100M for official)
-    # TOTAL_BUDGET = 100_000_000
+    #TOTAL_BUDGET = 100_000_000
     TOTAL_BUDGET = 10_000_000
 
     # 3. Define staged curriculum ratios
@@ -194,7 +215,7 @@ def main():
         stage_budget = TOTAL_BUDGET * config['budget_ratio']
         logging.info(f"\n {stage} budget is : {int(stage_budget):,} Tokens")
 
-        prepare_stage_data(datasets, stage, config['lang_ratios'], stage_budget)
+        prepare_stage_data(datasets, stage, config['lang_ratios'], stage_budget, val_ratio=0.1, output_base_dir="data")
 
 if __name__ == "__main__":
     main()
