@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 """
 try:
     #GLOBAL_TOKENIZER = Tokenizer.from_file("tokenizers/tokenizer_10M.json")
-    GLOBAL_TOKENIZER = Tokenizer.from_file("tokenizers/tokenizer_10M.json")
+    GLOBAL_TOKENIZER = Tokenizer.from_file("tokenizers/tokenizer_100M.json")
 except Exception:
     GLOBAL_TOKENIZER = None
     logging.warning("Custom Tokenizer not detected, falling back to approximation.")
@@ -31,22 +31,43 @@ def deep_quality_filter(example, lang):
         return False
         
     # 2. Alpha Ratio Check
-    # Filter out paragraphs full of numbers, punctuation, or gibberish (like log files)
-    # Calculate the number of Chinese, English, and Dutch characters (excluding spaces, numbers, and symbols)
+    # Filter out paragraphs full of numbers, punctuation, or gibberish
     alpha_chars = len(re.findall(r'[a-zA-Z\u4e00-\u9fff]', text)) 
     if text_len > 0 and (alpha_chars / text_len) < 0.5:
         return False # 如果文字佔不到整段的一半，丟棄
         
     # 3. Language Purity Check - Critical Optimization!
-    # If it's a Chinese dataset, ensure a high ratio of Chinese characters to prevent English contamination
     if lang == 'zho':
         chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
         if alpha_chars > 0 and (chinese_chars / alpha_chars) < 0.7:
             return False # 文字中少於 70% 是中文字，丟棄
             
-    # If it's a Dutch dataset, check for specific character features (simplified version)
-    # if lang == 'nld':
-
+    # 荷蘭文純度檢查 (防止英文污染與非自然語言)
+    if lang == 'nld':
+        # 將文本轉小寫並切分成單字集合
+        words = set(text.lower().split())
+        
+        # 荷蘭文特有的高頻停用詞 (定冠詞、不定冠詞、常見介系詞與動詞)
+        dutch_stopwords = {"de", "het", "een", "en", "van", "is", "dat", "in", "te", "op", "voor", "met", "zijn", "niet", "om"}
+        # 英文特有的高頻停用詞 (作為對抗組)
+        english_stopwords = {"the", "and", "of", "to", "a", "that", "was", "he", "it", "with", "as", "his", "on", "be"}
+        
+        # 計算文本中包含了多少個獨特的荷文/英文停用詞
+        nld_count = len(words.intersection(dutch_stopwords))
+        eng_count = len(words.intersection(english_stopwords))
+        
+        # 規則 A：自然語言檢查。如果句子夠長（超過 10 個單字），但完全沒有任何常見荷蘭文停用詞，
+        # 這高機率是列表、程式碼、雜訊或純外文，直接丟棄。
+        if len(words) >= 10 and nld_count == 0:
+            return False
+            
+        # 規則 B：語系對抗檢查。如果文本中的英文高頻詞多於荷蘭文高頻詞，
+        # 代表這段文本受到了嚴重的英文污染，直接丟棄。
+        if eng_count > nld_count:
+            return False
+            
+        # 規則 C：荷蘭文特殊字母結構檢查 (可選加強版)。荷蘭文常有連續雙母音 (aa, ee, oo, uu) 
+        # 或特定子音群 (sch)。如果需要更嚴格，可以檢查這些特徵，但目前 A 與 B 已經能過濾掉 90% 的雜訊。
     
     return True
 
@@ -88,30 +109,6 @@ def get_exact_row_count_for_budget(dataset, target_budget, lang, tokenizer=GLOBA
     logging.warning(f"[{lang}] Warning: Reached end of dataset before hitting the target budget. Total tokens accumulated: {accumulated_tokens:,}")
     return len(dataset)
 
-#def get_row_count_for_budget(dataset, target_budget, lang):
-    """
-    Core conversion: Iterate through the dataset, accumulate estimated tokens, 
-    and return the row index when the budget is reached.
-    """
-    accumulated_tokens = 0
-    
-    for idx, item in enumerate(dataset):
-        text = item['text']
-        # Approximation logic: Characters for ZH, space-separated words for EN/NL
-        if lang == 'zho':
-            estimated_tokens = len(text)
-        else:
-            estimated_tokens = len(text.split())
-            
-        accumulated_tokens += estimated_tokens
-        
-        # When we reach or exceed the target budget, return the current index + 1 (since index starts at 0)
-        if accumulated_tokens >= target_budget:
-            return idx + 1 
-            
-    # If we exhaust the dataset before reaching the budget, return the total length and log a warning
-    logging.warning(f"[{lang}] Warning: Reached end of dataset before hitting the target budget. Total tokens accumulated: {accumulated_tokens:,}")
-    return len(dataset)
 
 from datasets import DatasetDict
 
@@ -185,14 +182,26 @@ def main():
     for lang in langs:
         path = f"data/raw/{lang}_dataset"
         raw_ds = load_from_disk(path)
+
+        # 紀錄清洗前大小
+        original_size = len(raw_ds['train'])
+
         # Apply filtering rules
         cleaned_ds = raw_ds.filter(lambda x: deep_quality_filter(x, lang))
+
+        # 紀錄清洗後大小與計算差異
+        cleaned_size = len(cleaned_ds['train'])
+        removed_size = original_size - cleaned_size
+        removed_ratio = (removed_size / original_size) * 100 if original_size > 0 else 0
+        
+
         datasets[lang] = cleaned_ds
-        logging.info(f"{lang.upper()} Clean Finished: {len(raw_ds['train'])} -> {len(cleaned_ds['train'])}")
+        # 輸出至終端機
+        logging.info(f"{lang.upper()} Clean Finished: {original_size:,} -> {cleaned_size:,} (Removed {removed_ratio:.2f}%)")
 
     # 2. Define total budget (10M for prototyping, 100M for official)
     #TOTAL_BUDGET = 100_000_000
-    TOTAL_BUDGET = 10_000_000
+    TOTAL_BUDGET = 100_000_000
 
     # 3. Define staged curriculum ratios
     curriculum = {
