@@ -37,11 +37,16 @@ This repository contains the implementation for the 2026 BabyLM Challenge, Multi
 │   ├── run_10M.slurm           # Single-node test script for 10M
 │   └── run_100M.slurm          # Multi-node training script for 100M
 │
+├── external/                   # External official evaluation pipeline
+│   └── multilingual-evaluation/
+│
+├── docs/                       # Project documentation
+│   └── evaluation_quickstart.md
+│
 ├── notebooks/                  # Visualization & Analysis notebooks(A,C)
 │   ├── 01_data_eda.ipynb       # Corpus distribution EDA
 │   └── 02_plot_results.ipynb   # Plotting charts (Radar, Loss curves)
 │
-├── babylm-eval/                # Official evaluation pipeline(C)
 ├── .gitignore                  # Git ignore list
 ├── requirements.txt            # Python dependencies
 ├── README.md                   # This file
@@ -78,9 +83,11 @@ Run baseline dataset
 python src/data_pipeline/create_baseline.py
 ```
 
-If you haven't initialized the evaluation module, load the babylm-eval submodule:
+If you haven't initialized the evaluation module, load the official multilingual
+evaluation submodule:
 
 ```bash
+git submodule add https://github.com/babylm-org/multilingual-evaluation external/multilingual-evaluation
 git submodule update --init --recursive
 ```
 
@@ -108,16 +115,38 @@ sbatch scripts/run_100M.slurm
 
 ## 📊 Evaluation & Visualization 
 
-Once training checkpoints are generated, run evaluations using the official pipeline:
+Once training checkpoints are generated, run evaluations using the official
+multilingual evaluation pipeline. Start with a tiny local smoke test before
+running full evaluation on LRZ.
 
 ```bash
-# Example evaluation command inside the babylm-eval folder
-cd babylm-eval
-python run_eval.py --model_path ../checkpoints/100M_final --tasks default
+.venv/bin/lm_eval \
+  --model hf \
+  --model_args pretrained=outputs/checkpoints/final_model \
+  --include_path external/multilingual-evaluation/tasks \
+  --tasks babybabellm_eng \
+  --batch_size 1 \
+  --limit 1 \
+  --device cpu \
+  --output_path outputs/eval/smoke_eng
 ```
+
+For our target languages, the current task group names are:
+
+```text
+babybabellm_eng
+babybabellm_nld
+babybabellm_zho
+```
+
+For full LRZ runs, remove `--limit`, use `--device cuda`, and set
+`--batch_size auto`. More details and caveats are in
+[`docs/evaluation_quickstart.md`](docs/evaluation_quickstart.md).
 
 ## 📝 Notes 
 
 - This project is part of the **BabyLM Challenge 2026 (Multilingual Track)**.
 - Ensure all datasets are properly downloaded and processed before training.
-
+- The current model is `BertForMaskedLM`. The official 2026 multilingual
+  pipeline currently runs through `--model hf`; `hf-mlm` and `backend=mlm` are
+  not available in the tested `lm-eval` versions.
