@@ -1,17 +1,12 @@
-output_dir: outputs
+output_dir: outputs/baseline_10M_lr_3e-4
 seed: 42
+mode: baseline
 
-tokenizer_path: tokenizers/tokenizer_10M.json
+tokenizer_path: tokenizers/tokenizer_10M_baseline.json
 
 data_args:
-  curriculum_stages:
-    - name: Stage_1_Foundation
-      path: data/processed_10M/Stage_1_Foundation
-    - name: Stage_2_Alignment
-      path: data/processed_10M/Stage_2_Alignment
-    - name: Stage_3_HardBoosting
-      path: data/processed_10M/Stage_3_HardBoosting
-  val_ratio: 0.1
+  train_path: data/processed_10M/Stage_Baseline/train
+  val_path: data/processed_10M/Stage_Baseline/validation
 
 model_args:
   hidden_size: 256
@@ -25,9 +20,9 @@ training_args:
   batch_size: 4
   max_length: 128
   mlm_probability: 0.15
-  learning_rate: 0.0005
-  max_epochs: 1
-  max_steps: 3200
-  eval_every_steps: 10
+  learning_rate: 0.0003
+  max_epochs: 10
+  max_steps: 
+  eval_every_steps: 100
   max_val_steps: 20
   max_adjusted_token_exposure: 10000000

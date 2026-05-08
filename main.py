@@ -14,8 +14,8 @@ import torch
 #from src.data_pipeline.train_tokenizer import train_custom_tokenizer
 
 from src.model.architecture import build_model
-from src.training.dataset import get_curriculum_dataloaders
-from src.training.trainer import train_model_curriculum
+from src.training.dataset import get_baseline_dataloaders, get_curriculum_dataloaders
+from src.training.trainer import train_model, train_model_curriculum
 from transformers import PreTrainedTokenizerFast
 
 def setup_logging(log_file):
@@ -98,44 +98,69 @@ def main():
         )
         
         # --- Step 3: Dataset & DataLoader (Member B) ---
-        # logger.info("Step 3: Setting up Datasets and DataLoaders...")
-        # train_loader, val_loader = get_dataloaders(config['data_args'], tokenizer)
-        logger.info("Step 3: Setting up curriculum dataloaders...")
-
-        stage_loaders = get_curriculum_dataloaders(
-            curriculum_stages=config["data_args"]["curriculum_stages"],
-            tokenizer_path=tokenizer_path,
-            batch_size=config["training_args"]["batch_size"],
-            max_length=config["training_args"]["max_length"],
-            mlm_probability=config["training_args"].get("mlm_probability", 0.15),
-            val_ratio=config["data_args"].get("val_ratio", 0.1),
-            seed=config.get("seed", 42),
-        )
-
-        for stage in stage_loaders:
-            logger.info(
-                f"{stage['name']} | "
-                f"Train batches: {len(stage['train_loader'])} | "
-                f"Val batches: {len(stage['val_loader'])}"
-            )
         # --- Step 4: Training Loop (Member B) ---
-        # logger.info("Step 4: Starting training...")
-        # train_model(
-        #     model=model, 
-        #     train_loader=train_loader, 
-        #     val_loader=val_loader, 
-        #     config=config['training_args']
-        # )
-        logger.info("Step 4: Starting training...")
+        mode = config.get("mode", "baseline")
 
-        train_model_curriculum(
-            model=model,
-            stage_loaders=stage_loaders,
-            tokenizer=tokenizer,
-            config=config["training_args"],
-        )
+        if mode == "baseline":
+            logger.info("Step 3: Setting up baseline dataloaders...")
 
-        logger.info("Training completed successfully!")
+            train_loader, val_loader = get_baseline_dataloaders(
+                train_path=config["data_args"]["train_path"],
+                val_path=config["data_args"]["val_path"],
+                tokenizer_path=tokenizer_path,
+                batch_size=config["training_args"]["batch_size"],
+                max_length=config["training_args"]["max_length"],
+                mlm_probability=config["training_args"].get("mlm_probability", 0.15),
+            )
+
+            logger.info(f"Train batches: {len(train_loader)}")
+            logger.info(f"Val batches: {len(val_loader)}")
+
+            logger.info("Step 4: Starting baseline training...")
+            # Make trainer save logs/checkpoints to the experiment-specific folder
+            config["training_args"]["output_dir"] = config["output_dir"]
+            
+            train_model(
+                model=model,
+                train_loader=train_loader,
+                val_loader=val_loader,
+                tokenizer=tokenizer,
+                config=config["training_args"],
+            )
+
+        elif mode == "curriculum":
+            logger.info("Step 3: Setting up curriculum dataloaders...")
+
+            stage_loaders = get_curriculum_dataloaders(
+                curriculum_stages=config["data_args"]["curriculum_stages"],
+                tokenizer_path=tokenizer_path,
+                batch_size=config["training_args"]["batch_size"],
+                max_length=config["training_args"]["max_length"],
+                mlm_probability=config["training_args"].get("mlm_probability", 0.15),
+                val_ratio=config["data_args"].get("val_ratio", 0.1),
+                seed=config.get("seed", 42),
+            )
+
+            for stage in stage_loaders:
+                logger.info(
+                    f"{stage['name']} | "
+                    f"Train batches: {len(stage['train_loader'])} | "
+                    f"Val batches: {len(stage['val_loader'])}"
+                )
+
+            logger.info("Step 4: Starting curriculum training...")
+        # Make trainer save logs/checkpoints to the experiment-specific folder
+            config["training_args"]["output_dir"] = config["output_dir"]
+            
+            train_model_curriculum(
+                model=model,
+                stage_loaders=stage_loaders,
+                tokenizer=tokenizer,
+                config=config["training_args"],
+            )
+
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
     
     except Exception as e:
         logger.error(f"An error occurred during execution: {e}")

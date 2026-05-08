@@ -308,12 +308,46 @@ def train_model(
                         f"Stopping: reached adjusted token exposure limit "
                         f"{max_adjusted_token_exposure:,}"
                     )
+
+                    final_validation_loss = ""
+                    if val_loader is not None:
+                        final_validation_loss_value = evaluate(
+                            model=model,
+                            val_loader=val_loader,
+                            device=device,
+                            max_val_steps=max_val_steps,
+                        )
+                        final_validation_loss = (
+                            f"{final_validation_loss_value:.6f}"
+                            if final_validation_loss_value is not None
+                            else ""
+                        )
+
                     final_path = save_checkpoint(
                         model=model,
                         tokenizer=tokenizer,
                         output_dir=output_dir,
                         checkpoint_name="final_model",
                     )
+
+                    writer.writerow({
+                        "epoch": epoch,
+                        "global_step": global_step,
+                        "train_loss": f"{loss.item():.6f}",
+                        "validation_loss": final_validation_loss,
+                        "raw_seen_tokens_total": tracker.raw_seen_tokens_total,
+                        "raw_seen_tokens_eng": tracker.raw_seen_tokens_eng,
+                        "raw_seen_tokens_nld": tracker.raw_seen_tokens_nld,
+                        "raw_seen_tokens_zho": tracker.raw_seen_tokens_zho,
+                        "adjusted_seen_tokens_eng": f"{tracker.adjusted_seen_tokens_eng:.2f}",
+                        "adjusted_seen_tokens_nld": f"{tracker.adjusted_seen_tokens_nld:.2f}",
+                        "adjusted_seen_tokens_zho": f"{tracker.adjusted_seen_tokens_zho:.2f}",
+                        "adjusted_seen_tokens_total": f"{tracker.adjusted_seen_tokens_total:.2f}",
+                        "checkpoint_path": final_path,
+                    })
+                    f.flush()
+
+                    logger.info(f"Final validation loss: {final_validation_loss}")
                     logger.info(f"Final checkpoint saved to {final_path}")
                     return
 

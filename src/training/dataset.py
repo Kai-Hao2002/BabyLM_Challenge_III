@@ -141,6 +141,51 @@ def get_dataloaders(
 
     return train_loader, val_loader
 
+def get_baseline_dataloaders(
+    train_path,
+    val_path,
+    tokenizer_path,
+    batch_size=8,
+    max_length=128,
+    mlm_probability=0.15,
+):
+    train_hf_dataset = load_from_disk(train_path)
+    val_hf_dataset = load_from_disk(val_path)
+
+    print("\n[Baseline Dataset]")
+    print(f"Train rows: {len(train_hf_dataset)}")
+    print(f"Validation rows: {len(val_hf_dataset)}")
+
+    train_dataset = BabyLMMaskedDataset(
+        hf_dataset=train_hf_dataset,
+        tokenizer_path=tokenizer_path,
+        max_length=max_length,
+        mlm_probability=mlm_probability,
+    )
+
+    val_dataset = BabyLMMaskedDataset(
+        hf_dataset=val_hf_dataset,
+        tokenizer_path=tokenizer_path,
+        max_length=max_length,
+        mlm_probability=mlm_probability,
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        collate_fn=collate_fn,
+    )
+
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        collate_fn=collate_fn,
+    )
+
+    return train_loader, val_loader
+
 def get_curriculum_dataloaders(
     curriculum_stages,
     tokenizer_path,
