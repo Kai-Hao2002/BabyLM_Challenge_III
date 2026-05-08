@@ -10,7 +10,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 """
 try:
     #GLOBAL_TOKENIZER = Tokenizer.from_file("tokenizers/tokenizer_10M.json")
-    GLOBAL_TOKENIZER = Tokenizer.from_file("tokenizers/tokenizer_100M.json")
+    GLOBAL_TOKENIZER = Tokenizer.from_file("tokenizers/tokenizer_10M.json")
 except Exception:
     GLOBAL_TOKENIZER = None
     logging.warning("Custom Tokenizer not detected, falling back to approximation.")
@@ -201,7 +201,7 @@ def main():
 
     # 2. Define total budget (10M for prototyping, 100M for official)
     #TOTAL_BUDGET = 100_000_000
-    TOTAL_BUDGET = 100_000_000
+    TOTAL_BUDGET = 10_000_000
 
     # 3. Define staged curriculum ratios
     curriculum = {

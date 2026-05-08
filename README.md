@@ -68,14 +68,14 @@ python src/data_pipeline/download.py
 ```
 
 
-step 1: Train Custom BPE Tokenizer
-```bash
-python src/data_pipeline/train_tokenizer.py
-```
-
-step 2: generate final dataset, adjust TOTAL_BUDGET and GLOBAL_TOKENIZER=Tokenizer_100M_official.json
+Generate stage curriculum dataset, adjust TOTAL_BUDGET and GLOBAL_TOKENIZER=Tokenizer_100M_official.json
 ```bash
 python src/data_pipeline/clean_and_mix.py
+```
+
+Run baseline dataset
+```bash
+python src/data_pipeline/create_baseline.py
 ```
 
 If you haven't initialized the evaluation module, load the babylm-eval submodule:

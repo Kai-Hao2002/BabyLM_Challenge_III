@@ -23,6 +23,7 @@ def get_rough_10m_corpus():
         'zho': 450_000      # 3%  
     }
     """
+
     budgets = {
         'eng': 7_500_000, # 75%
         'nld': 2_000_000, # 20%
@@ -102,7 +103,7 @@ def train_custom_tokenizer():
 
     # 6. Save Model
     os.makedirs("tokenizers", exist_ok=True)
-    save_path = "tokenizers/tokenizer_100M.json"
+    save_path = "tokenizers/tokenizer_10M.json"
     tokenizer.save(save_path)
     logging.info(f"✅ Tokenizer trained and saved to: {save_path}")
 
