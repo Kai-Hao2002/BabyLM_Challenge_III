@@ -1,0 +1,3 @@
+[submodule "external/multilingual-evaluation"]
+	path = external/multilingual-evaluation
+	url = https://github.com/babylm-org/multilingual-evaluation
