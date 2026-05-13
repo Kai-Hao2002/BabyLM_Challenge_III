@@ -1,73 +1,94 @@
 import os,re
 import logging
-from datasets import load_from_disk, concatenate_datasets
+from datasets import load_from_disk, concatenate_datasets, DatasetDict
 from tokenizers import Tokenizer
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-"""
+def normalize_text(example, lang):
+    text = str(example['text'])
+    if lang == 'zho':
+        text = text.replace(r'$$\underline{}$$', '____')
+        text = re.sub(r'[A-Za-z]+:[^\s]+', '', text)
+        
+        # save the simple formulas (like $x$, $y$, $E=mc^2$) by removing the surrounding $ signs, 
+        # but replace the complex ones with [公式]
+        text = re.sub(r'\$\$?([a-zA-Z0-9]+)\$\$?', r'\1', text)
+        text = re.sub(r'\$\$?.*?\$\$?', '[公式]', text, flags=re.DOTALL)
+        
+        text = re.sub(r'\\[a-zA-Z]+(\{.*?\})?', '', text)
+        text = text.replace('①', '1.').replace('②', '2.').replace('③', '3.').replace('④', '4.')
+        text = re.sub(r'\\n+', ' ', text)
+        text = re.sub(r'\s+', ' ', text)
 
-"""
-try:
-    #GLOBAL_TOKENIZER = Tokenizer.from_file("tokenizers/tokenizer_10M.json")
-    GLOBAL_TOKENIZER = Tokenizer.from_file("tokenizers/tokenizer_10M.json")
-except Exception:
-    GLOBAL_TOKENIZER = None
-    logging.warning("Custom Tokenizer not detected, falling back to approximation.")
+        # transform the speaker labels to a more standardized format (e.g., "老师:", "妈妈:", "小孩:") 
+        # and ensure they are treated as part of the text rather than metadata
+        text = text.replace('*TEACHER:', '老师:')
+        text = text.replace('*MOTHER:', '妈妈:')
+        text = text.replace('*TARGET_CHILD:', '小孩:')
+        text = re.sub(r'\*[A-Z_]+:', '旁白:', text) 
+        
+        # transform the punctuation to a more consistent format (e.g., replace '.' with '。' in Chinese text) 
+        # to help the tokenizer better learn the language-specific punctuation patterns
+        text = text.replace('.', '。')
+        
+        # remove spaces between Chinese characters and punctuation to prevent the tokenizer from treating them as separate tokens,
+        text = re.sub(r'(?<=[\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff。，！？、])', '', text)
+        text = re.sub(r'(?<=[\u4e00-\u9fff。，！？、])\s+(?=[\u4e00-\u9fff])', '', text)
+        
+        # add newlines before speaker labels to help the model learn dialogue structure, 
+        # but only for the main speakers to avoid over-segmentation
+        text = text.replace(' 老师:', '\n老师:')
+        text = text.replace(' 妈妈:', '\n妈妈:')
+        text = text.replace(' 小孩:', '\n小孩:')
+        
+    example['text'] = text.strip()
+    return example
 
-#GLOBAL_TOKENIZER = None
 
 def deep_quality_filter(example, lang):
     """
-    Deep Data Quality Filter
+    Step 2: Deep Data Quality Filter 
+    This function applies a series of heuristic rules to filter out low-quality or noisy data.
+    The rules are designed based on common issues observed in the dataset and are tailored for each language.
+    The function returns True if the example passes all quality checks, and False if it should be filtered out.
     """
     text = example['text']
     text_len = len(text)
     
-    # 1. Basic length filtering
-    if lang == 'zho' and text_len < 10:
+    # 1. Length too short
+    if lang == 'zho' and text_len < 3:
         return False
     if lang in ['eng', 'nld'] and text_len < 30:
         return False
+
+    if text.count('[公式]') >= 3:
+        return False
         
     # 2. Alpha Ratio Check
-    # Filter out paragraphs full of numbers, punctuation, or gibberish
     alpha_chars = len(re.findall(r'[a-zA-Z\u4e00-\u9fff]', text)) 
-    if text_len > 0 and (alpha_chars / text_len) < 0.5:
-        return False # 如果文字佔不到整段的一半，丟棄
+    if text_len > 0 and (alpha_chars / text_len) < 0.4:
+        return False 
         
-    # 3. Language Purity Check - Critical Optimization!
+    # 3. Language Purity Check
     if lang == 'zho':
         chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-        if alpha_chars > 0 and (chinese_chars / alpha_chars) < 0.7:
-            return False # 文字中少於 70% 是中文字，丟棄
+        if alpha_chars > 0 and (chinese_chars / alpha_chars) < 0.55:
+            return False 
             
-    # 荷蘭文純度檢查 (防止英文污染與非自然語言)
+    # 4. Dutch Purity Check
     if lang == 'nld':
-        # 將文本轉小寫並切分成單字集合
         words = set(text.lower().split())
-        
-        # 荷蘭文特有的高頻停用詞 (定冠詞、不定冠詞、常見介系詞與動詞)
         dutch_stopwords = {"de", "het", "een", "en", "van", "is", "dat", "in", "te", "op", "voor", "met", "zijn", "niet", "om"}
-        # 英文特有的高頻停用詞 (作為對抗組)
         english_stopwords = {"the", "and", "of", "to", "a", "that", "was", "he", "it", "with", "as", "his", "on", "be"}
         
-        # 計算文本中包含了多少個獨特的荷文/英文停用詞
         nld_count = len(words.intersection(dutch_stopwords))
         eng_count = len(words.intersection(english_stopwords))
         
-        # 規則 A：自然語言檢查。如果句子夠長（超過 10 個單字），但完全沒有任何常見荷蘭文停用詞，
-        # 這高機率是列表、程式碼、雜訊或純外文，直接丟棄。
         if len(words) >= 10 and nld_count == 0:
             return False
-            
-        # 規則 B：語系對抗檢查。如果文本中的英文高頻詞多於荷蘭文高頻詞，
-        # 代表這段文本受到了嚴重的英文污染，直接丟棄。
         if eng_count > nld_count:
             return False
-            
-        # 規則 C：荷蘭文特殊字母結構檢查 (可選加強版)。荷蘭文常有連續雙母音 (aa, ee, oo, uu) 
-        # 或特定子音群 (sch)。如果需要更嚴格，可以檢查這些特徵，但目前 A 與 B 已經能過濾掉 90% 的雜訊。
     
     return True
 
@@ -80,7 +101,7 @@ def calculate_adjusted_tokens(target_tokens, lang):
     # Formula: Actual sampled = Target budget / Premium factor
     return int(target_tokens / premiums[lang])
 
-def get_exact_row_count_for_budget(dataset, target_budget, lang, tokenizer=GLOBAL_TOKENIZER):
+def get_exact_row_count_for_budget(dataset, target_budget, lang, tokenizer):
     """
     Core conversion (Precise Version): Calculate exact token consumption by running actual BPE encoding.
     """
@@ -112,11 +133,12 @@ def get_exact_row_count_for_budget(dataset, target_budget, lang, tokenizer=GLOBA
 
 from datasets import DatasetDict
 
-def prepare_stage_data(datasets, stage_name, ratios, total_budget, val_ratio, output_base_dir="data"):
+def prepare_stage_data(datasets, stage_name, ratios, total_budget, val_ratio, output_base_dir, tokenizer, vocab_name):
     """
     Create, sample, mix, shuffle, split train/val, and save the dataset for a specific stage.
     """
     logging.info(f"========== Preparing {stage_name} Data ==========")
+    logging.info(f"--- Preparing {stage_name} for {vocab_name} ---")
     train_chunks = []
     val_chunks = []
     
@@ -129,8 +151,8 @@ def prepare_stage_data(datasets, stage_name, ratios, total_budget, val_ratio, ou
         shuffled_lang_ds = dataset_lang.shuffle(seed=42) 
         
         # 2. compute the exact number of rows needed to meet the adjusted token budget using the precise BPE-based calculation
-        needed_train_rows = get_exact_row_count_for_budget(shuffled_lang_ds, actual_allowed_tokens, lang)
-        
+        needed_train_rows = get_exact_row_count_for_budget(shuffled_lang_ds, actual_allowed_tokens, lang, tokenizer)
+
         # 3. decide val size based on the train size and val_ratio
         needed_val_rows = int(needed_train_rows * val_ratio)
         
@@ -167,7 +189,7 @@ def prepare_stage_data(datasets, stage_name, ratios, total_budget, val_ratio, ou
     })
     
     scale_folder = "processed_10M" if total_budget <= 10_000_000 else "processed_100M"
-    save_path = os.path.join(output_base_dir, scale_folder, stage_name)
+    save_path = os.path.join(output_base_dir, scale_folder, vocab_name, stage_name)
     
     final_dataset.save_to_disk(save_path)
     logging.info(f"✅ {stage_name} Mixed! Train: {len(mixed_train):,} rows, Val: {len(mixed_val):,} rows. Saved to: {save_path}\n")
@@ -183,25 +205,36 @@ def main():
         path = f"data/raw/{lang}_dataset"
         raw_ds = load_from_disk(path)
 
-        # 紀錄清洗前大小
-        original_size = len(raw_ds['train'])
+        train_split = raw_ds['train'] if isinstance(raw_ds, dict) else raw_ds
+        original_size = len(train_split)
 
-        # Apply filtering rules
-        cleaned_ds = raw_ds.filter(lambda x: deep_quality_filter(x, lang))
+        logging.info(f"[{lang.upper()}] Normalization...")
+        # Step A: Normalization 
+        normalized_ds = train_split.map(
+            lambda x: normalize_text(x, lang),
+            load_from_cache_file=False 
+        )
+        
 
-        # 紀錄清洗後大小與計算差異
-        cleaned_size = len(cleaned_ds['train'])
+        logging.info(f"[{lang.upper()}] Filtering...")
+        # Step B: Quality filtering
+        cleaned_ds = normalized_ds.filter(
+            lambda x: deep_quality_filter(x, lang),
+            load_from_cache_file=False
+        )
+
+        cleaned_size = len(cleaned_ds)
         removed_size = original_size - cleaned_size
         removed_ratio = (removed_size / original_size) * 100 if original_size > 0 else 0
         
-
-        datasets[lang] = cleaned_ds
-        # 輸出至終端機
+        
+        datasets[lang] = DatasetDict({'train': cleaned_ds})
+        
         logging.info(f"{lang.upper()} Clean Finished: {original_size:,} -> {cleaned_size:,} (Removed {removed_ratio:.2f}%)")
 
     # 2. Define total budget (10M for prototyping, 100M for official)
     #TOTAL_BUDGET = 100_000_000
-    TOTAL_BUDGET = 10_000_000
+    TOTAL_BUDGET = 100_000_000
 
     # 3. Define staged curriculum ratios
     curriculum = {
@@ -219,12 +252,39 @@ def main():
         }
     }
 
+    vocab_configs = {
+        #"vocab_14k": "tokenizers/tokenizer_10M_14k.json",
+        #"vocab_16k": "tokenizers/tokenizer_10M_16k.json",
+        #"vocab_18k": "tokenizers/tokenizer_10M_18k.json",
+        "vocab_30k": "tokenizers/tokenizer_100M_30k.json",
+        "vocab_32k": "tokenizers/tokenizer_100M_32k.json",
+        "vocab_34k": "tokenizers/tokenizer_100M_34k.json"
+    }
+
     # 4. Generate Mixed Data
-    for stage, config in curriculum.items():
-        stage_budget = TOTAL_BUDGET * config['budget_ratio']
-        logging.info(f"\n {stage} budget is : {int(stage_budget):,} Tokens")
+    for vocab_name, tokenizer_path in vocab_configs.items():
+        logging.info(f"\n========================================")
+        logging.info(f"🚀 starting: {vocab_name}")
+        logging.info(f"========================================")
 
-        prepare_stage_data(datasets, stage, config['lang_ratios'], stage_budget, val_ratio=0.1, output_base_dir="data")
+        try:
+            current_tokenizer = Tokenizer.from_file(tokenizer_path)
+        except Exception:
+            logging.warning(f"⚠️ Cannot find {tokenizer_path}, skipping {vocab_name}。")
+            continue
 
+        for stage, config in curriculum.items():
+            stage_budget = TOTAL_BUDGET * config['budget_ratio']
+            
+            prepare_stage_data(
+                datasets=datasets,
+                stage_name=stage,
+                ratios=config['lang_ratios'],
+                total_budget=stage_budget,
+                val_ratio=0.1,
+                output_base_dir="data",
+                tokenizer=current_tokenizer,
+                vocab_name=vocab_name       
+            )
 if __name__ == "__main__":
     main()

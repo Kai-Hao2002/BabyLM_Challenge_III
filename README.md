@@ -72,15 +72,14 @@ download raw dataset
 python src/data_pipeline/download.py    
 ```
 
-
-Generate stage curriculum dataset, adjust TOTAL_BUDGET and GLOBAL_TOKENIZER=Tokenizer_100M_official.json
-```bash
-python src/data_pipeline/clean_and_mix.py
-```
-
-Run baseline dataset
+Generate baseline dataset, adjusting tokenizer and total budget you want
 ```bash
 python src/data_pipeline/create_baseline.py
+```
+
+Generate stage curriculum dataset, adjusting TOTAL_BUDGET and vocab_configs (fill the tokenizer you want)
+```bash
+python src/data_pipeline/clean_and_mix.py
 ```
 
 If you haven't initialized the evaluation module, load the official multilingual
