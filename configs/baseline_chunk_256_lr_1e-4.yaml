@@ -1,0 +1,29 @@
+output_dir: outputs/baseline_chunk_256_lr_1e-4
+seed: 42
+mode: baseline
+
+tokenizer_path: tokenizers/tokenizer_10M_baseline.json
+
+data_args:
+  use_chunking: true
+  train_path: data/processed_10M/Stage_Baseline/train
+  val_path: data/processed_10M/Stage_Baseline/validation
+
+model_args:
+  hidden_size: 256
+  num_hidden_layers: 4
+  num_attention_heads: 4
+  intermediate_size: 1024
+  max_position_embeddings: 512
+  pad_token_id: 3
+
+training_args:
+  batch_size: 4
+  max_length: 256
+  mlm_probability: 0.15
+  learning_rate: 0.0001
+  max_epochs: 1
+  max_steps:
+  eval_every_steps: 100
+  max_val_steps: 20
+  max_adjusted_token_exposure: 10000000

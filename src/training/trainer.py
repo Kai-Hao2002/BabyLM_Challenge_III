@@ -49,6 +49,28 @@ class TokenExposureTracker:
                 self.raw_seen_tokens_zho += tokens
             else:
                 raise ValueError(f"Unknown language label: {lang}")
+            
+    def update_from_language_ids(self, attention_mask, language_ids):
+        """
+        For: wrapped packing
+        Update token exposure using per-token language ids.
+
+        language_ids:
+        0 = eng
+        1 = nld
+        2 = zho
+        -100 = padding / ignored position
+        """
+
+        valid_mask = attention_mask.bool()
+
+        eng_tokens = ((language_ids == 0) & valid_mask).sum().item()
+        nld_tokens = ((language_ids == 1) & valid_mask).sum().item()
+        zho_tokens = ((language_ids == 2) & valid_mask).sum().item()
+
+        self.raw_seen_tokens_eng += eng_tokens
+        self.raw_seen_tokens_nld += nld_tokens
+        self.raw_seen_tokens_zho += zho_tokens
 
     @property
     def raw_seen_tokens_total(self):
@@ -123,7 +145,8 @@ def evaluate(model, val_loader, device, max_val_steps=None):
 
     with torch.no_grad():
         for step, batch in enumerate(val_loader):
-            languages = batch.pop("language")
+            batch.pop("language", None)
+            batch.pop("language_ids", None)
 
             batch = {
                 k: v.to(device)
@@ -219,12 +242,16 @@ def train_model(
             progress = tqdm(train_loader, desc=f"Epoch {epoch}")
 
             for batch in progress:
-                languages = batch.pop("language")
+                languages = batch.pop("language", None)
+                language_ids = batch.pop("language_ids", None)
 
                 batch = {
                     k: v.to(device)
                     for k, v in batch.items()
                 }
+
+                if language_ids is not None:
+                    language_ids = language_ids.to(device)
 
                 optimizer.zero_grad()
 
@@ -237,10 +264,16 @@ def train_model(
                 global_step += 1
 
                 # Count raw seen tokens by language
-                tracker.update(
-                    attention_mask=batch["attention_mask"],
-                    languages=languages,
-                )
+                if language_ids is not None:
+                    tracker.update_from_language_ids(
+                        attention_mask=batch["attention_mask"],
+                        language_ids=language_ids,
+                    )
+                else:
+                    tracker.update(
+                        attention_mask=batch["attention_mask"],
+                        languages=languages,
+                    )
 
                 adjusted_total = tracker.adjusted_seen_tokens_total
 
