@@ -9,6 +9,7 @@ datasets>=2.14.0
 tokenizers>=0.14.0
 accelerate>=0.24.0      
 evaluate>=0.4.0         
+trl>=0.8.0
 
 # === Configuration & Utilities ===
 pyyaml>=6.0
