@@ -23,7 +23,10 @@ data/
 # Outputs / checkpoints
 outputs/
 checkpoints/
-
+outputs/
+logs/
+*.out
+*.err
 # HuggingFace / model weights
 *.bin
 *.safetensors
