@@ -1,9 +1,12 @@
 import os,re
 import logging
+import hashlib
 from datasets import load_from_disk, concatenate_datasets, DatasetDict
 from tokenizers import Tokenizer
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+seen_hashes = set()
 
 def normalize_text(example, lang):
     text = str(example['text'])
@@ -45,16 +48,55 @@ def normalize_text(example, lang):
     example['text'] = text.strip()
     return example
 
+def tag_aligned_corpus(example, lang):
+    """
+    Tag English-Chinese aligned corpus
+    """
+    is_aligned = False
+    text = str(example['text'])
+    
+    if lang == 'zho':
+        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+        alpha_chars = len(re.findall(r'[a-zA-Z]', text))
+        
+        # condition: both Chinese and English characters are greater than 15, and their ratio is within a reasonable range
+        if chinese_chars > 15 and alpha_chars > 15:
+            ratio = chinese_chars / alpha_chars
+            if 0.2 < ratio < 5.0:
+                is_aligned = True
+                
+    example['is_aligned'] = is_aligned
+    return example
+
+def is_unique(example):
+    """
+    Step 1: Uniqueness Filter using MD5 Hashing of normalized text
+    """
+    text = str(example['text'])
+    
+    # simplify the text by removing spaces and punctuation, and converting to lowercase, to create a more robust hash for deduplication
+    simplified_text = re.sub(r'[^\w\u4e00-\u9fff]', '', text.lower())
+    
+    # if the simplified text is empty after removing noise, we can consider it as non-unique to filter out such cases
+    if not simplified_text:
+        return False
+        
+    # calculate MD5 Hash (more memory-efficient than storing strings)
+    text_hash = hashlib.md5(simplified_text.encode('utf-8')).hexdigest()
+    
+    if text_hash in seen_hashes:
+        return False
+        
+    seen_hashes.add(text_hash)
+    return True
 
 def deep_quality_filter(example, lang):
     """
     Step 2: Deep Data Quality Filter 
-    This function applies a series of heuristic rules to filter out low-quality or noisy data.
-    The rules are designed based on common issues observed in the dataset and are tailored for each language.
-    The function returns True if the example passes all quality checks, and False if it should be filtered out.
     """
     text = example['text']
     text_len = len(text)
+    is_aligned = example.get('is_aligned', False)
     
     # 1. Length too short
     if lang == 'zho' and text_len < 3:
@@ -64,17 +106,17 @@ def deep_quality_filter(example, lang):
 
     if text.count('[公式]') >= 3:
         return False
+
+    alpha_chars_total = len(re.findall(r'[a-zA-Z\u4e00-\u9fff]', text))
         
-    # 2. Alpha Ratio Check
-    alpha_chars = len(re.findall(r'[a-zA-Z\u4e00-\u9fff]', text)) 
-    if text_len > 0 and (alpha_chars / text_len) < 0.4:
-        return False 
-        
-    # 3. Language Purity Check
-    if lang == 'zho':
-        chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
-        if alpha_chars > 0 and (chinese_chars / alpha_chars) < 0.55:
+    # Exempt aligned corpus from these checks
+    if not is_aligned:
+        if text_len > 0 and (alpha_chars_total / text_len) < 0.4:
             return False 
+        if lang == 'zho':
+            chinese_chars = len(re.findall(r'[\u4e00-\u9fff]', text))
+            if alpha_chars_total > 0 and (chinese_chars / alpha_chars_total) < 0.55:
+                return False 
             
     # 4. Dutch Purity Check
     if lang == 'nld':
@@ -151,7 +193,44 @@ def prepare_stage_data(datasets, stage_name, ratios, total_budget, val_ratio, ou
         shuffled_lang_ds = dataset_lang.shuffle(seed=42) 
         
         # 2. compute the exact number of rows needed to meet the adjusted token budget using the precise BPE-based calculation
-        needed_train_rows = get_exact_row_count_for_budget(shuffled_lang_ds, actual_allowed_tokens, lang, tokenizer)
+        if stage_name == "Stage_2_Alignment" and lang == 'zho' and "is_aligned" in shuffled_lang_ds.column_names:
+            logging.info(f"[{lang}] Enabling Stage 2 Aligned Upsampling...")
+            
+            aligned_ds = shuffled_lang_ds.filter(lambda x: x['is_aligned'])
+            regular_ds = shuffled_lang_ds.filter(lambda x: not x['is_aligned'])
+            
+            # Allocate 50% budget to aligned corpus
+            aligned_budget = actual_allowed_tokens * 0.50
+            needed_aligned_rows = get_exact_row_count_for_budget(aligned_ds, aligned_budget, lang, tokenizer)
+            
+            # if the aligned corpus is smaller than the needed rows, we will use all of it and adjust the regular corpus budget accordingly
+            actual_aligned_rows = min(needed_aligned_rows, len(aligned_ds))
+            remaining_budget = actual_allowed_tokens - (aligned_budget * (actual_aligned_rows / max(1, needed_aligned_rows)))
+            
+            needed_regular_rows = get_exact_row_count_for_budget(regular_ds, remaining_budget, lang, tokenizer)
+            needed_val_rows = int((actual_aligned_rows + needed_regular_rows) * val_ratio)
+            
+            # Sample and concatenate
+            train_aligned = aligned_ds.select(range(actual_aligned_rows))
+            train_regular = regular_ds.select(range(needed_regular_rows))
+            
+            # Extract Validation data from regular_ds
+            val_sampled = regular_ds.select(range(needed_regular_rows, min(len(regular_ds), needed_regular_rows + needed_val_rows)))
+            
+            # merge train and val for this stage
+            train_sampled = concatenate_datasets([train_aligned, train_regular]).shuffle(seed=42)
+            needed_train_rows = len(train_sampled) 
+            
+        else:
+            # Stage 1, Stage 3 or non-Chinese languages in Stage 2: use the original precise calculation without aligned upsampling
+            needed_train_rows = get_exact_row_count_for_budget(shuffled_lang_ds, actual_allowed_tokens, lang, tokenizer)
+            needed_val_rows = int(needed_train_rows * val_ratio)
+            
+            if (needed_train_rows + needed_val_rows) > len(shuffled_lang_ds):
+                needed_val_rows = len(shuffled_lang_ds) - needed_train_rows
+                
+            train_sampled = shuffled_lang_ds.select(range(needed_train_rows))
+            val_sampled = shuffled_lang_ds.select(range(needed_train_rows, needed_train_rows + needed_val_rows))
 
         # 3. decide val size based on the train size and val_ratio
         needed_val_rows = int(needed_train_rows * val_ratio)
@@ -214,27 +293,37 @@ def main():
             lambda x: normalize_text(x, lang),
             load_from_cache_file=False 
         )
-        
 
+        logging.info(f"[{lang.upper()}] Tagging Aligned Corpus...")
+        tagged_ds = normalized_ds.map(
+            lambda x: tag_aligned_corpus(x, lang),
+            load_from_cache_file=False
+        )
+        
         logging.info(f"[{lang.upper()}] Filtering...")
-        # Step B: Quality filtering
-        cleaned_ds = normalized_ds.filter(
+        cleaned_ds = tagged_ds.filter(
             lambda x: deep_quality_filter(x, lang),
             load_from_cache_file=False
         )
+        
+        logging.info(f"[{lang.upper()}] Deduplicating...")
+        seen_hashes.clear() 
+        deduped_ds = cleaned_ds.filter(
+            is_unique,
+            load_from_cache_file=False
+        )
 
-        cleaned_size = len(cleaned_ds)
+        cleaned_size = len(deduped_ds)
         removed_size = original_size - cleaned_size
         removed_ratio = (removed_size / original_size) * 100 if original_size > 0 else 0
         
+        datasets[lang] = DatasetDict({'train': deduped_ds})
         
-        datasets[lang] = DatasetDict({'train': cleaned_ds})
-        
-        logging.info(f"{lang.upper()} Clean Finished: {original_size:,} -> {cleaned_size:,} (Removed {removed_ratio:.2f}%)")
+        logging.info(f"{lang.upper()} Clean & Dedup Finished: {original_size:,} -> {cleaned_size:,} (Removed {removed_ratio:.2f}%)")
 
     # 2. Define total budget (10M for prototyping, 100M for official)
     #TOTAL_BUDGET = 100_000_000
-    TOTAL_BUDGET = 100_000_000
+    TOTAL_BUDGET = 10_000_000
 
     # 3. Define staged curriculum ratios
     curriculum = {
@@ -253,12 +342,12 @@ def main():
     }
 
     vocab_configs = {
-        #"vocab_14k": "tokenizers/tokenizer_10M_14k.json",
-        #"vocab_16k": "tokenizers/tokenizer_10M_16k.json",
-        #"vocab_18k": "tokenizers/tokenizer_10M_18k.json",
-        "vocab_30k": "tokenizers/tokenizer_100M_30k.json",
-        "vocab_32k": "tokenizers/tokenizer_100M_32k.json",
-        "vocab_34k": "tokenizers/tokenizer_100M_34k.json"
+        "vocab_14k": "tokenizers/tokenizer_10M_14k.json",
+        "vocab_16k": "tokenizers/tokenizer_10M_16k.json",
+        "vocab_18k": "tokenizers/tokenizer_10M_18k.json",
+        #"vocab_30k": "tokenizers/tokenizer_100M_30k.json",
+        #"vocab_32k": "tokenizers/tokenizer_100M_32k.json",
+        #"vocab_34k": "tokenizers/tokenizer_100M_34k.json"
     }
 
     # 4. Generate Mixed Data
