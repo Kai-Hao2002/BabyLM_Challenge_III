@@ -341,6 +341,20 @@ def main():
         }
     }
 
+    # ==========================================
+    # Define Static Baseline 
+    # Based on the total tokens I calculated in your EDA 
+    # (English ~11.7M, Chinese ~8.8M, Dutch ~6.1M)
+    # English 44%, Chinese 33%, and Dutch 23%
+    # ==========================================
+
+    static_baseline = {
+        "Baseline_Static": {
+            'budget_ratio': 1.0, 
+            'lang_ratios': {'eng': 0.44, 'zho': 0.33, 'nld': 0.23}
+        }
+    }
+
     vocab_configs = {
         "vocab_14k": "tokenizers/tokenizer_10M_14k.json",
         "vocab_16k": "tokenizers/tokenizer_10M_16k.json",
@@ -375,5 +389,20 @@ def main():
                 tokenizer=current_tokenizer,
                 vocab_name=vocab_name       
             )
+
+        for stage, config in static_baseline.items():
+            stage_budget = TOTAL_BUDGET * config['budget_ratio']
+            
+            prepare_stage_data(
+                datasets=datasets,
+                stage_name=stage,
+                ratios=config['lang_ratios'],
+                total_budget=stage_budget,
+                val_ratio=0.1,
+                output_base_dir="data",
+                tokenizer=current_tokenizer,
+                vocab_name=vocab_name       
+            )
+            
 if __name__ == "__main__":
     main()
