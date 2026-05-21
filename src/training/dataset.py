@@ -479,11 +479,9 @@ class BabyLMPackedBaseDataset(TorchDataset):
             eos_language_id=-100,
             drop_last=True,
         )
-
         print("Packed dataset created.")
         print(f"Packed samples: {len(self.packed_dataset)}")
 
-        # Debug check
         first = self.packed_dataset[0]
         print("Packed sample keys:", first.keys())
         print("input_ids length:", len(first["input_ids"]))
@@ -493,7 +491,6 @@ class BabyLMPackedBaseDataset(TorchDataset):
                 "language_ids missing from paired packed samples. "
                 "We need language_ids for per-token language tracking."
             )
-
         print("language_ids length:", len(first["language_ids"]))
 
         if len(first["input_ids"]) != len(first["language_ids"]):

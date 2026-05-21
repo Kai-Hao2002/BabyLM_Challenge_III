@@ -1,4 +1,5 @@
-output_dir: outputs/baseline_pack_wrapped_128_lr_1e-4_bertmask
+# output_dir: outputs/baseline_pack_wrapped_128_lr_1e-4_bertmask
+output_dir: outputs/baseline_pack_wrapped_128_lr_1e-4_bertmask_fixedpack
 seed: 42
 mode: baseline
 

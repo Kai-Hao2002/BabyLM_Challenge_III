@@ -1,13 +1,15 @@
-output_dir: outputs/baseline_chunk_256_lr_1e-4_bertmask
+# output_dir: outputs/baseline_pack_wrapped_128_lr_1e-4_bertmask
+output_dir: outputs/baseline_pack_wrapped_32_lr_1e-4_bertmask_fixedpack
 seed: 42
 mode: baseline
 
-tokenizer_path: tokenizers/tokenizer_10M_baseline.json
+tokenizer_path: tokenizers/tokenizer_100M_baseline.json
 
 data_args:
-  use_chunking: true
-  train_path: data/processed_10M/Stage_Baseline/train
-  val_path: data/processed_10M/Stage_Baseline/validation
+  use_packing: true
+  packing_strategy: wrapped
+  train_path: data/processed_100M/Stage_Baseline/train
+  val_path: data/processed_100M/Stage_Baseline/validation
 
 model_args:
   hidden_size: 256
@@ -19,7 +21,7 @@ model_args:
 
 training_args:
   batch_size: 4
-  max_length: 256
+  max_length: 32
   mlm_probability: 0.15
   learning_rate: 0.0001
   max_epochs: 1
