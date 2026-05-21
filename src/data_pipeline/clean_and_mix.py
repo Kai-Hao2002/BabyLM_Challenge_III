@@ -326,6 +326,28 @@ def main():
     TOTAL_BUDGET = 10_000_000
 
     # 3. Define staged curriculum ratios
+    # ==========================================
+    # Ablation Study Matrix
+    # 16k Tokenizer 
+    # ==========================================
+    
+    # 1. Naive Baseline 
+    naive_baseline = {
+        "Baseline_Naive": {
+            'budget_ratio': 1.0, 
+            'lang_ratios': {'eng': 0.334, 'zho': 0.333, 'nld': 0.333}
+        }
+    }
+
+    # 2. Static Baseline 
+    static_baseline = {
+        "Baseline_Static": {
+            'budget_ratio': 1.0, 
+            'lang_ratios': {'eng': 0.44, 'zho': 0.33, 'nld': 0.23}
+        }
+    }
+
+    # 3. Curriculum 
     curriculum = {
         "Stage_1_Foundation": {
             'budget_ratio': 0.30, 
@@ -341,20 +363,6 @@ def main():
         }
     }
 
-    # ==========================================
-    # Define Static Baseline 
-    # Based on the total tokens I calculated in your EDA 
-    # (English ~11.7M, Chinese ~8.8M, Dutch ~6.1M)
-    # English 44%, Chinese 33%, and Dutch 23%
-    # ==========================================
-
-    static_baseline = {
-        "Baseline_Static": {
-            'budget_ratio': 1.0, 
-            'lang_ratios': {'eng': 0.44, 'zho': 0.33, 'nld': 0.23}
-        }
-    }
-
     vocab_configs = {
         "vocab_14k": "tokenizers/tokenizer_10M_14k.json",
         "vocab_16k": "tokenizers/tokenizer_10M_16k.json",
@@ -365,37 +373,25 @@ def main():
     }
 
     # 4. Generate Mixed Data
+    all_experiments = {**naive_baseline, **static_baseline, **curriculum}
+
     for vocab_name, tokenizer_path in vocab_configs.items():
         logging.info(f"\n========================================")
-        logging.info(f"🚀 starting: {vocab_name}")
+        logging.info(f"🚀 starting data generation for: {vocab_name}")
         logging.info(f"========================================")
 
         try:
             current_tokenizer = Tokenizer.from_file(tokenizer_path)
         except Exception:
-            logging.warning(f"⚠️ Cannot find {tokenizer_path}, skipping {vocab_name}。")
+            logging.warning(f"⚠️ Cannot find {tokenizer_path}, please check path.")
             continue
 
-        for stage, config in curriculum.items():
+        for stage, config in all_experiments.items():
             stage_budget = TOTAL_BUDGET * config['budget_ratio']
             
             prepare_stage_data(
                 datasets=datasets,
-                stage_name=stage,
-                ratios=config['lang_ratios'],
-                total_budget=stage_budget,
-                val_ratio=0.1,
-                output_base_dir="data",
-                tokenizer=current_tokenizer,
-                vocab_name=vocab_name       
-            )
-
-        for stage, config in static_baseline.items():
-            stage_budget = TOTAL_BUDGET * config['budget_ratio']
-            
-            prepare_stage_data(
-                datasets=datasets,
-                stage_name=stage,
+                stage_name=stage, 
                 ratios=config['lang_ratios'],
                 total_budget=stage_budget,
                 val_ratio=0.1,

@@ -16,9 +16,6 @@ def get_rough_10m_corpus():
     """
     langs = ['eng', 'zho', 'nld']
     """"
-    # Baseline: Initial naive approach: Equal token budget for each language (1:1:1 ratio)
-    target_budget_per_lang = 10_000_000 / 3 
-
 
     # 100M budget tokenizer(Only 15M tokens 3% for Chinese, 80% for English, 17% for Dutch)
     budgets = {
@@ -27,7 +24,6 @@ def get_rough_10m_corpus():
         'zho': 450_000      # 3%  
     }
 
-    
     """
 
     # 10M budget tokenizer(Total 10M tokens 5% for Chinese, 75% for English, 20% for Dutch)
