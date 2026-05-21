@@ -92,6 +92,10 @@ def main():
         )
 
         logger.info(f"Tokenizer vocab size: {tokenizer.vocab_size}")
+        logger.info(f"pad: {tokenizer.pad_token} {tokenizer.pad_token_id}")
+        logger.info(f"bos: {tokenizer.bos_token} {tokenizer.bos_token_id}")
+        logger.info(f"eos: {tokenizer.eos_token} {tokenizer.eos_token_id}")
+        logger.info(f"mask: {tokenizer.mask_token} {tokenizer.mask_token_id}")
         # --- Step 2: Model Initialization (Member B) ---
         # logger.info("Step 2: Initializing model...")
         # model = build_model(config['model_args'], vocab_size=tokenizer.vocab_size)
@@ -123,6 +127,8 @@ def main():
                     max_length=config["training_args"]["max_length"],
                     mlm_probability=config["training_args"].get("mlm_probability", 0.15),
                     packing_strategy=config["data_args"].get("packing_strategy", "wrapped"),
+                    objective=config["data_args"].get("objective", "mlm"),
+                    insert_eos=config["data_args"].get("insert_eos", False),
                 )
             elif use_chunking:
                 logger.info("Using chunked baseline dataloaders...")

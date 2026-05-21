@@ -8,7 +8,7 @@
 # 6. 保留 language 欄位給 trainer 計算 token exposure
 import torch
 from torch.utils.data import Dataset as TorchDataset, DataLoader
-from datasets import load_from_disk, Dataset as HFDataset
+from datasets import load_from_disk
 from transformers import PreTrainedTokenizerFast
 
 LANG_TO_ID = {
@@ -22,6 +22,64 @@ ID_TO_LANG = {
     1: "nld",
     2: "zho",
 }
+
+
+def build_paired_wrapped_packed_samples(
+    #  packing 不再依賴 trl.pack_dataset，也不要用任何可能分欄位處理的 map() packing
+    hf_dataset,
+    tokenizer,
+    max_length,
+    lang_to_id,
+    insert_eos=False,
+    eos_language_id=-100,
+    drop_last=True,
+):
+    all_input_ids = []
+    all_language_ids = []
+
+    for idx, item in enumerate(hf_dataset):
+        text = item["text"]
+        lang = item["language"]
+
+        if lang not in lang_to_id:
+            raise ValueError(f"Unknown language: {lang}")
+
+        input_ids = tokenizer(
+            text,
+            add_special_tokens=False,
+        )["input_ids"]
+
+        if len(input_ids) > 0:
+            language_ids = [lang_to_id[lang]] * len(input_ids)
+
+            if insert_eos and tokenizer.eos_token_id is not None:
+                input_ids = input_ids + [tokenizer.eos_token_id]
+                language_ids = language_ids + [eos_language_id]
+
+            all_input_ids.extend(input_ids)
+            all_language_ids.extend(language_ids)
+
+        if idx % 1000 == 0:
+            print(f"Tokenized {idx} rows")
+
+    if len(all_input_ids) != len(all_language_ids):
+        raise ValueError("input_ids and language_ids stream length mismatch.")
+
+    packed_samples = []
+    for start in range(0, len(all_input_ids), max_length):
+        end = start + max_length
+        input_chunk = all_input_ids[start:end]
+        language_chunk = all_language_ids[start:end]
+
+        if len(input_chunk) < max_length and drop_last:
+            break
+
+        packed_samples.append({
+            "input_ids": input_chunk,
+            "language_ids": language_chunk,
+        })
+
+    return packed_samples
 
 def mask_tokens_bert_style(input_ids, tokenizer, mlm_probability):
     labels = input_ids.clone()
@@ -378,7 +436,8 @@ def get_baseline_chunked_dataloaders(
 
     return train_loader, val_loader
 
-class BabyLMPackedMaskedDataset(TorchDataset):
+class BabyLMPackedBaseDataset(TorchDataset):
+    # 負責 tokenizer 載入, optional insert_eos
     def __init__(
         self,
         hf_dataset,
@@ -386,6 +445,7 @@ class BabyLMPackedMaskedDataset(TorchDataset):
         max_length=256,
         mlm_probability=0.15,
         packing_strategy="wrapped",
+        insert_eos=False,
     ):
         self.tokenizer = PreTrainedTokenizerFast(
             tokenizer_file=tokenizer_path,
@@ -398,53 +458,26 @@ class BabyLMPackedMaskedDataset(TorchDataset):
 
         self.max_length = max_length
         self.mlm_probability = mlm_probability
+        self.insert_eos = insert_eos
 
-        print("Tokenizing dataset for packed training...")
-        try:
-            from trl import pack_dataset
-        except ImportError as exc:
-            raise ImportError(
-                "Packed baseline requires `trl`. Install project dependencies "
-                "with `pip install -r requirements.txt`."
-            ) from exc
-
-        tokenized_examples = {
-            "input_ids": [],
-            "language_ids": [],
-        }
-
-        for idx, item in enumerate(hf_dataset):
-            text = item["text"]
-            lang = item["language"]
-
-            if lang not in LANG_TO_ID:
-                raise ValueError(f"Unknown language: {lang}")
-
-            encoded = self.tokenizer(
-                text,
-                add_special_tokens=False,
+        if packing_strategy != "wrapped":
+            raise ValueError(
+                "Only packing_strategy='wrapped' is supported by paired packing."
             )
 
-            input_ids = encoded["input_ids"]
-            language_ids = [LANG_TO_ID[lang]] * len(input_ids)
-
-            if len(input_ids) > 0:
-                tokenized_examples["input_ids"].append(input_ids)
-                tokenized_examples["language_ids"].append(language_ids)
-
-            if idx % 1000 == 0:
-                print(f"Tokenized {idx} rows")
-
-        tokenized_dataset = HFDataset.from_dict(tokenized_examples)
-
+        print("Tokenizing dataset for packed training...")
         print("Packing dataset...")
         print(f"Packing strategy: {packing_strategy}")
         print(f"Sequence length: {max_length}")
 
-        self.packed_dataset = pack_dataset(
-            tokenized_dataset,
-            seq_length=max_length,
-            strategy=packing_strategy,
+        self.packed_dataset = build_paired_wrapped_packed_samples(
+            hf_dataset=hf_dataset,
+            tokenizer=self.tokenizer,
+            max_length=max_length,
+            lang_to_id=LANG_TO_ID,
+            insert_eos=insert_eos,
+            eos_language_id=-100,
+            drop_last=True,
         )
 
         print("Packed dataset created.")
@@ -457,7 +490,7 @@ class BabyLMPackedMaskedDataset(TorchDataset):
 
         if "language_ids" not in first:
             raise ValueError(
-                "language_ids was not preserved by pack_dataset. "
+                "language_ids missing from paired packed samples. "
                 "We need language_ids for per-token language tracking."
             )
 
@@ -471,6 +504,9 @@ class BabyLMPackedMaskedDataset(TorchDataset):
     def __len__(self):
         return len(self.packed_dataset)
 
+
+class BabyLMPackedMaskedDataset(BabyLMPackedBaseDataset):
+    # 負責 BERT MLM 的 mask_tokens() 和 MLM __getitem__()
     def mask_tokens(self, input_ids):
         return mask_tokens_bert_style(
             input_ids=input_ids,
@@ -506,6 +542,57 @@ class BabyLMPackedMaskedDataset(TorchDataset):
             "labels": labels,
             "language_ids": language_ids,
         }
+
+
+class BabyLMPackedCausalDataset(BabyLMPackedBaseDataset):
+    # 負責 GPT-2 causal LM 的 __getitem__(), padding label 設 -100, 預設 insert_eos=True
+    def __init__(
+        self,
+        hf_dataset,
+        tokenizer_path,
+        max_length=256,
+        mlm_probability=0.15,
+        packing_strategy="wrapped",
+        insert_eos=True,
+    ):
+        super().__init__(
+            hf_dataset=hf_dataset,
+            tokenizer_path=tokenizer_path,
+            max_length=max_length,
+            mlm_probability=mlm_probability,
+            packing_strategy=packing_strategy,
+            insert_eos=insert_eos,
+        )
+
+    def __getitem__(self, idx):
+        item = self.packed_dataset[idx]
+
+        input_ids = item["input_ids"]
+        language_ids = item["language_ids"]
+
+        attention_mask = [1] * len(input_ids)
+
+        pad_length = self.max_length - len(input_ids)
+
+        if pad_length > 0:
+            # GPT-2 的 labels 等於 input_ids, 非 padding token 都要被預測, padding token 不計算 loss
+            input_ids = input_ids + [self.tokenizer.pad_token_id] * pad_length
+            attention_mask = attention_mask + [0] * pad_length
+            language_ids = language_ids + [-100] * pad_length
+
+        input_ids = torch.tensor(input_ids, dtype=torch.long)
+        attention_mask = torch.tensor(attention_mask, dtype=torch.long)
+        language_ids = torch.tensor(language_ids, dtype=torch.long)
+        # shift 是 GPT2LMHeadModel 內部做的, -100 的位置會被 loss 忽略
+        labels = input_ids.clone()
+        labels[attention_mask == 0] = -100
+
+        return {
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "labels": labels,
+            "language_ids": language_ids,
+        }
     
 def get_baseline_packed_dataloaders(
     train_path,
@@ -515,28 +602,41 @@ def get_baseline_packed_dataloaders(
     max_length=256,
     mlm_probability=0.15,
     packing_strategy="wrapped",
+    objective="mlm",
+    insert_eos=False,
 ):
     train_hf_dataset = load_from_disk(train_path)
     val_hf_dataset = load_from_disk(val_path)
 
+    if objective == "mlm": # -> BabyLMPackedMaskedDataset
+        dataset_cls = BabyLMPackedMaskedDataset 
+    elif objective == "causal_lm": # -> BabyLMPackedCausalDataset
+        dataset_cls = BabyLMPackedCausalDataset
+    else:
+        raise ValueError(f"Unknown packed objective: {objective}")
+
     print("\n[Baseline Packed Dataset]")
+    print(f"Objective: {objective}")
+    print(f"Insert EOS: {insert_eos}")
     print(f"Original train rows: {len(train_hf_dataset)}")
     print(f"Original validation rows: {len(val_hf_dataset)}")
 
-    train_dataset = BabyLMPackedMaskedDataset(
+    train_dataset = dataset_cls(
         hf_dataset=train_hf_dataset,
         tokenizer_path=tokenizer_path,
         max_length=max_length,
         mlm_probability=mlm_probability,
         packing_strategy=packing_strategy,
+        insert_eos=insert_eos,
     )
 
-    val_dataset = BabyLMPackedMaskedDataset(
+    val_dataset = dataset_cls(
         hf_dataset=val_hf_dataset,
         tokenizer_path=tokenizer_path,
         max_length=max_length,
         mlm_probability=mlm_probability,
         packing_strategy=packing_strategy,
+        insert_eos=insert_eos,
     )
 
     train_loader = DataLoader(
