@@ -399,19 +399,15 @@ class BabyLMPackedMaskedDataset(TorchDataset):
         self.max_length = max_length
         self.mlm_probability = mlm_probability
 
-        print("Tokenizing dataset for packed training...")
-        try:
-            from trl import pack_dataset
-        except ImportError as exc:
-            raise ImportError(
-                "Packed baseline requires `trl`. Install project dependencies "
-                "with `pip install -r requirements.txt`."
-            ) from exc
+        if packing_strategy != "wrapped":
+            raise ValueError(
+                "Only packing_strategy='wrapped' is supported by the simple paired packer."
+            )
 
-        tokenized_examples = {
-            "input_ids": [],
-            "language_ids": [],
-        }
+        print("Tokenizing dataset for simple paired packed training...")
+
+        all_input_ids = []
+        all_language_ids = []
 
         for idx, item in enumerate(hf_dataset):
             text = item["text"]
@@ -426,41 +422,70 @@ class BabyLMPackedMaskedDataset(TorchDataset):
             )
 
             input_ids = encoded["input_ids"]
-            language_ids = [LANG_TO_ID[lang]] * len(input_ids)
 
             if len(input_ids) > 0:
-                tokenized_examples["input_ids"].append(input_ids)
-                tokenized_examples["language_ids"].append(language_ids)
+                all_input_ids.extend(input_ids)
+                all_language_ids.extend([LANG_TO_ID[lang]] * len(input_ids))
 
             if idx % 1000 == 0:
                 print(f"Tokenized {idx} rows")
 
-        tokenized_dataset = HFDataset.from_dict(tokenized_examples)
+        if len(all_input_ids) != len(all_language_ids):
+            raise ValueError("input_ids and language_ids length mismatch before packing.")
 
-        print("Packing dataset...")
+        print("Packing dataset with simple paired packer...")
         print(f"Packing strategy: {packing_strategy}")
         print(f"Sequence length: {max_length}")
 
-        self.packed_dataset = pack_dataset(
-            tokenized_dataset,
-            seq_length=max_length,
-            strategy=packing_strategy,
-        )
+         # full chunk
+        # self.packed_dataset = []
+
+        # num_full_chunks = len(all_input_ids) // max_length
+
+        # for chunk_idx in range(num_full_chunks):
+        #     start = chunk_idx * max_length
+        #     end = start + max_length
+
+        #     input_chunk = all_input_ids[start:end]
+        #     lang_chunk = all_language_ids[start:end]
+
+        #     if len(input_chunk) != max_length:
+        #         raise ValueError(f"input_chunk length mismatch at chunk_idx={chunk_idx}")
+
+        #     if len(lang_chunk) != max_length:
+        #         raise ValueError(f"lang_chunk length mismatch at chunk_idx={chunk_idx}")
+
+        #     self.packed_dataset.append({
+        #         "input_ids": input_chunk,
+        #         "language_ids": lang_chunk,
+        #     })
+
+        # dropped_tokens = len(all_input_ids) - num_full_chunks * max_length
+        # print(f"Dropped tail tokens: {dropped_tokens}")
+
+        self.packed_dataset = []
+
+        for start in range(0, len(all_input_ids), max_length):
+            input_chunk = all_input_ids[start:start + max_length]
+            lang_chunk = all_language_ids[start:start + max_length]
+
+            if len(input_chunk) == 0:
+                continue
+
+            if len(input_chunk) != len(lang_chunk):
+                raise ValueError(f"Chunk length mismatch at start={start}")
+
+            self.packed_dataset.append({
+                "input_ids": input_chunk,
+                "language_ids": lang_chunk,
+            })
 
         print("Packed dataset created.")
         print(f"Packed samples: {len(self.packed_dataset)}")
 
-        # Debug check
         first = self.packed_dataset[0]
         print("Packed sample keys:", first.keys())
         print("input_ids length:", len(first["input_ids"]))
-
-        if "language_ids" not in first:
-            raise ValueError(
-                "language_ids was not preserved by pack_dataset. "
-                "We need language_ids for per-token language tracking."
-            )
-
         print("language_ids length:", len(first["language_ids"]))
 
         if len(first["input_ids"]) != len(first["language_ids"]):
