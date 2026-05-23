@@ -101,14 +101,16 @@ class TokenExposureTracker:
         )
 
 
-def get_next_checkpoint_target(current_adjusted_tokens):
+def get_next_checkpoint_target(current_adjusted_tokens, checkpoint_interval_tokens=None):
     """
     Official-style checkpoint schedule:
     0–10M: every 1M
     10M–100M: every 10M
     100M–1B: every 100M
     """
-    if current_adjusted_tokens < 10_000_000:
+    if checkpoint_interval_tokens is not None:
+        interval = checkpoint_interval_tokens
+    elif current_adjusted_tokens < 10_000_000:
         interval = 1_000_000
     elif current_adjusted_tokens < 100_000_000:
         interval = 10_000_000
@@ -192,6 +194,12 @@ def train_model(
     max_adjusted_token_exposure = float(
         config.get("max_adjusted_token_exposure", 1_000_000_000)
     )
+    checkpoint_interval_tokens = config.get("checkpoint_interval_tokens", None)
+    checkpoint_interval_tokens = (
+        int(checkpoint_interval_tokens)
+        if checkpoint_interval_tokens is not None
+        else None
+    )
 
     if max_epochs > 10:
         raise ValueError("BabyLM rule: max_epochs must be <= 10")
@@ -213,7 +221,8 @@ def train_model(
 
     global_step = 0
     next_checkpoint_target = get_next_checkpoint_target(
-        tracker.adjusted_seen_tokens_total
+        tracker.adjusted_seen_tokens_total,
+        checkpoint_interval_tokens,
     )
 
     fieldnames = [
@@ -294,7 +303,10 @@ def train_model(
                         f"{next_checkpoint_target:,}: {checkpoint_path}"
                     )
 
-                    next_checkpoint_target = get_next_checkpoint_target(adjusted_total)
+                    next_checkpoint_target = get_next_checkpoint_target(
+                        adjusted_total,
+                        checkpoint_interval_tokens,
+                    )
 
                 # Validation
                 validation_loss = ""
@@ -431,6 +443,12 @@ def train_model_curriculum(
     max_adjusted_token_exposure = float(
         config.get("max_adjusted_token_exposure", 1_000_000_000)
     )
+    checkpoint_interval_tokens = config.get("checkpoint_interval_tokens", None)
+    checkpoint_interval_tokens = (
+        int(checkpoint_interval_tokens)
+        if checkpoint_interval_tokens is not None
+        else None
+    )
 
     if max_epochs > 10:
         raise ValueError("BabyLM rule: max_epochs must be <= 10")
@@ -451,7 +469,8 @@ def train_model_curriculum(
     tracker = TokenExposureTracker()
     global_step = 0
     next_checkpoint_target = get_next_checkpoint_target(
-        tracker.adjusted_seen_tokens_total
+        tracker.adjusted_seen_tokens_total,
+        checkpoint_interval_tokens,
     )
 
     fieldnames = [
@@ -533,7 +552,8 @@ def train_model_curriculum(
                         )
 
                         next_checkpoint_target = get_next_checkpoint_target(
-                            adjusted_total
+                            adjusted_total,
+                            checkpoint_interval_tokens,
                         )
 
                     validation_loss = ""

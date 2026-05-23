@@ -1,4 +1,4 @@
-output_dir: outputs/baseline_pack_wrapped_256_lr_1e-4_gpt2
+output_dir: outputs/debug_checkpoint_gpt2_32
 seed: 42
 mode: baseline
 
@@ -9,8 +9,8 @@ data_args:
   packing_strategy: wrapped
   objective: causal_lm
   insert_eos: true
-  train_path: data/processed_10M/vocab_16k/Baseline_Naive/train
-  val_path: data/processed_10M/vocab_16k/Baseline_Naive/validation
+  train_path: data/processed_10M/Stage_Baseline/train
+  val_path: data/processed_10M/Stage_Baseline/validation
 
 model_args:
   model_type: gpt2
@@ -18,19 +18,19 @@ model_args:
   n_layer: 4
   n_head: 4
   n_inner: 1024
-  n_positions: 256
-  n_ctx: 256
+  n_positions: 32
+  n_ctx: 32
   pad_token_id: 3
   bos_token_id: 1
   eos_token_id: 2
 
 training_args:
   batch_size: 4
-  max_length: 256
+  max_length: 32
   learning_rate: 0.0001
   max_epochs: 1
   max_steps:
-  eval_every_steps: 100
-  max_val_steps: 20
-  max_adjusted_token_exposure: 10000000
-  checkpoint_interval_tokens: 1000000
+  eval_every_steps: 10
+  max_val_steps: 2
+  max_adjusted_token_exposure: 3000
+  checkpoint_interval_tokens: 1000

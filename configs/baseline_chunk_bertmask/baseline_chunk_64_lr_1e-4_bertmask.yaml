@@ -27,3 +27,4 @@ training_args:
   eval_every_steps: 100
   max_val_steps: 20
   max_adjusted_token_exposure: 10000000
+  checkpoint_interval_tokens: 1000000

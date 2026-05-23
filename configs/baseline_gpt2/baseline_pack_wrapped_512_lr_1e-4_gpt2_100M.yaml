@@ -1,16 +1,16 @@
-output_dir: outputs/baseline_pack_wrapped_512_lr_1e-4_gpt2
+output_dir: outputs/baseline_pack_wrapped_512_lr_1e-4_gpt2_100M
 seed: 42
 mode: baseline
 
-tokenizer_path: tokenizers/tokenizer_10M_16k.json
+tokenizer_path: tokenizers/tokenizer_100M_32k.json
 
 data_args:
   use_packing: true
   packing_strategy: wrapped
   objective: causal_lm
   insert_eos: true
-  train_path: data/processed_10M/vocab_16k/Baseline_Naive/train
-  val_path: data/processed_10M/vocab_16k/Baseline_Naive/validation
+  train_path: data/processed_100M/vocab_32k/Baseline_Naive/train
+  val_path: data/processed_100M/vocab_32k/Baseline_Naive/validation
 
 model_args:
   model_type: gpt2
@@ -30,7 +30,7 @@ training_args:
   learning_rate: 0.0001
   max_epochs: 1
   max_steps:
-  eval_every_steps: 100
+  eval_every_steps: 1000
   max_val_steps: 20
-  max_adjusted_token_exposure: 10000000
-  checkpoint_interval_tokens: 1000000
+  max_adjusted_token_exposure: 100000000
+  checkpoint_interval_tokens: 10000000
