@@ -1,10 +1,10 @@
 from datasets import load_from_disk
 from transformers import PreTrainedTokenizerFast
 
-ds = load_from_disk("data/processed_10M/Stage_Baseline/train")
+ds = load_from_disk("data/processed_10M/vocab_16k/Baseline_Naive/train")
 
 tokenizer = PreTrainedTokenizerFast(
-    tokenizer_file="tokenizers/tokenizer_10M_baseline.json",
+    tokenizer_file="tokenizers/tokenizer_10M_16k.json",
     unk_token="<unk>",
     bos_token="<s>",
     eos_token="</s>",

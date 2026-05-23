@@ -11,8 +11,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.training.dataset import BabyLMPackedMaskedDataset, LANG_TO_ID, ID_TO_LANG
 
-DATASET_PATH = "data/processed_10M/Stage_Baseline/train"
-TOKENIZER_PATH = "tokenizers/tokenizer_10M_baseline.json"
+DATASET_PATH = "data/processed_10M/vocab_16k/Baseline_Naive/train"
+TOKENIZER_PATH = "tokenizers/tokenizer_10M_16k.json"
 MAX_LENGTH = 512
 
 

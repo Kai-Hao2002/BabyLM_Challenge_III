@@ -2,12 +2,12 @@ output_dir: outputs/baseline_chunk_256_lr_1e-4_bertmask
 seed: 42
 mode: baseline
 
-tokenizer_path: tokenizers/tokenizer_10M_baseline.json
+tokenizer_path: tokenizers/tokenizer_10M_16k.json
 
 data_args:
   use_chunking: true
-  train_path: data/processed_10M/Stage_Baseline/train
-  val_path: data/processed_10M/Stage_Baseline/validation
+  train_path: data/processed_10M/vocab_16k/Baseline_Naive/train
+  val_path: data/processed_10M/vocab_16k/Baseline_Naive/validation
 
 model_args:
   hidden_size: 256

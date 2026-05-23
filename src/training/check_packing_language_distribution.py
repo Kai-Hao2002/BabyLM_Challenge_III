@@ -25,11 +25,11 @@ def parse_args():
     )
     parser.add_argument(
         "--dataset-path",
-        default="data/processed_10M/Stage_Baseline/train",
+        default="data/processed_10M/vocab_16k/Baseline_Naive/train",
     )
     parser.add_argument(
         "--tokenizer-path",
-        default="tokenizers/tokenizer_10M_baseline.json",
+        default="tokenizers/tokenizer_10M_16k.json",
     )
     parser.add_argument("--max-length", type=int, default=128)
     parser.add_argument(
