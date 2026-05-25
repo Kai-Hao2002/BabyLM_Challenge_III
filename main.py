@@ -82,6 +82,10 @@ def main():
         logger.info("Step 1: Loading tokenizer...")
 
         tokenizer_path = config["tokenizer_path"]
+        model_max_length = config["model_args"].get(
+            "max_position_embeddings",
+            config["model_args"].get("n_positions", 512),
+        )
         tokenizer = PreTrainedTokenizerFast(
             tokenizer_file=tokenizer_path,
             unk_token="<unk>",
@@ -89,6 +93,7 @@ def main():
             eos_token="</s>",
             pad_token="<pad>",
             mask_token="<mask>",
+            model_max_length=model_max_length,
         )
 
         logger.info(f"Tokenizer vocab size: {tokenizer.vocab_size}")
@@ -177,6 +182,10 @@ def main():
                 batch_size=config["training_args"]["batch_size"],
                 max_length=config["training_args"]["max_length"],
                 mlm_probability=config["training_args"].get("mlm_probability", 0.15),
+                use_packing=config["data_args"].get("use_packing", False),
+                packing_strategy=config["data_args"].get("packing_strategy", "wrapped"),
+                objective=config["data_args"].get("objective", "mlm"), #預設用mlm
+                insert_eos=config["data_args"].get("insert_eos", False), #eos預設false
                 val_ratio=config["data_args"].get("val_ratio", 0.1),
                 seed=config.get("seed", 42),
             )

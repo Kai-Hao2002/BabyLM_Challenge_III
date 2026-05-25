@@ -18,8 +18,8 @@ model_args:
   n_layer: 4
   n_head: 4
   n_inner: 1024
-  n_positions: 32
-  n_ctx: 32
+  n_positions: 512
+  n_ctx: 512
   pad_token_id: 3
   bos_token_id: 1
   eos_token_id: 2
