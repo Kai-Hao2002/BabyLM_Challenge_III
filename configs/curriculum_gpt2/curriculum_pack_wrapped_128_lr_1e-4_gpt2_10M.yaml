@@ -1,0 +1,48 @@
+output_dir: outputs/curriculum_pack_wrapped_gpt2_10M/curriculum_pack_wrapped_128_lr_1e-4_gpt2_10M
+seed: 42
+mode: curriculum
+
+tokenizer_path: tokenizers/tokenizer_10M_16k.json
+
+data_args:
+  use_packing: true
+  packing_strategy: wrapped
+  objective: causal_lm
+  insert_eos: true
+  validation_path: data/processed_10M/vocab_16k/Baseline_Naive/validation
+  curriculum_stages:
+    - name: stage_1_foundation
+      train_path: data/processed_10M/vocab_16k/Stage_1_Foundation/train
+      target_adjusted_tokens: 3000000
+      checkpoint_name: stage_1_3M
+    - name: stage_2_alignment
+      train_path: data/processed_10M/vocab_16k/Stage_2_Alignment/train
+      target_adjusted_tokens: 6000000
+      checkpoint_name: stage_2_6M
+    - name: stage_3_hardboosting
+      train_path: data/processed_10M/vocab_16k/Stage_3_HardBoosting/train
+      target_adjusted_tokens: 10000000
+      checkpoint_name: final_10M
+
+model_args:
+  model_type: gpt2
+  n_embd: 256
+  n_layer: 4
+  n_head: 4
+  n_inner: 1024
+  n_positions: 512
+  n_ctx: 512
+  pad_token_id: 3
+  bos_token_id: 1
+  eos_token_id: 2
+
+training_args:
+  batch_size: 4
+  max_length: 128
+  learning_rate: 0.0001
+  max_epochs: 10
+  max_steps:
+  eval_every_steps: 100
+  max_val_steps: 20
+  max_adjusted_token_exposure: 10000000
+  checkpoint_interval_tokens: 1000000

@@ -665,6 +665,7 @@ def get_curriculum_dataloaders(
     packing_strategy="wrapped",
     objective="mlm",
     insert_eos=False,
+    validation_path=None,
     val_ratio=0.1,
     seed=42,
 ):
@@ -673,12 +674,14 @@ def get_curriculum_dataloaders(
     for stage in curriculum_stages:
         stage_name = stage["name"]
         train_hf_dataset = load_from_disk(stage["train_path"])
-        val_hf_dataset = load_from_disk(stage["val_path"])
+        stage_val_path = validation_path or stage["val_path"]
+        val_hf_dataset = load_from_disk(stage_val_path)
 
         print(f"\n[{stage_name}]")
         print(f"Objective: {objective}")
         print(f"Use packing: {use_packing}")
         print(f"Insert EOS: {insert_eos}")
+        print(f"Validation path: {stage_val_path}")
         print(f"Train rows: {len(train_hf_dataset)}")
         print(f"Validation rows: {len(val_hf_dataset)}")
 

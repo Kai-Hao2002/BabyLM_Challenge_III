@@ -186,6 +186,7 @@ def main():
                 packing_strategy=config["data_args"].get("packing_strategy", "wrapped"),
                 objective=config["data_args"].get("objective", "mlm"), #預設用mlm
                 insert_eos=config["data_args"].get("insert_eos", False), #eos預設false
+                validation_path=config["data_args"].get("validation_path"),
                 val_ratio=config["data_args"].get("val_ratio", 0.1),
                 seed=config.get("seed", 42),
             )
