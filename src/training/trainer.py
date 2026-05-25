@@ -13,9 +13,11 @@ import os
 import csv
 import math
 import logging
+import json
 import torch
 from torch.optim import AdamW
 from tqdm import tqdm
+from transformers import PreTrainedTokenizerFast
 
 
 BYTE_PREMIUM = {
@@ -128,6 +130,52 @@ def format_checkpoint_name(token_count):
     return f"step_{int(token_count / 1_000_000_000)}B"
 
 
+def resave_hf_fast_tokenizer(checkpoint_path, model_max_length=512):
+    tokenizer_json_path = os.path.join(checkpoint_path, "tokenizer.json")
+
+    if not os.path.exists(tokenizer_json_path):
+        raise FileNotFoundError(
+            f"tokenizer.json not found after tokenizer.save_pretrained: "
+            f"{tokenizer_json_path}"
+        )
+
+    hf_tokenizer = PreTrainedTokenizerFast(
+        tokenizer_file=tokenizer_json_path,
+        unk_token="<unk>",
+        bos_token="<s>",
+        eos_token="</s>",
+        pad_token="<pad>",
+        mask_token="<mask>",
+        model_max_length=model_max_length,
+    )
+    hf_tokenizer.save_pretrained(checkpoint_path)
+
+    tokenizer_config_path = os.path.join(checkpoint_path, "tokenizer_config.json")
+    if os.path.exists(tokenizer_config_path):
+        with open(tokenizer_config_path, "r") as f:
+            tokenizer_config = json.load(f)
+
+        tokenizer_config["tokenizer_class"] = "PreTrainedTokenizerFast"
+        tokenizer_config["model_max_length"] = model_max_length
+
+        with open(tokenizer_config_path, "w") as f:
+            json.dump(tokenizer_config, f, indent=2)
+            f.write("\n")
+
+
+def infer_model_max_length(model, default=512):
+    config = getattr(model, "config", None)
+    if config is None:
+        return default
+
+    for attr in ("max_position_embeddings", "n_positions"):
+        value = getattr(config, attr, None)
+        if value is not None:
+            return int(value)
+
+    return default
+
+
 def save_checkpoint(model, tokenizer, output_dir, checkpoint_name):
     checkpoint_path = os.path.join(output_dir, "checkpoints", checkpoint_name)
     os.makedirs(checkpoint_path, exist_ok=True)
@@ -136,6 +184,10 @@ def save_checkpoint(model, tokenizer, output_dir, checkpoint_name):
 
     if tokenizer is not None:
         tokenizer.save_pretrained(checkpoint_path)
+        resave_hf_fast_tokenizer(
+            checkpoint_path,
+            model_max_length=infer_model_max_length(model),
+        )
 
     return checkpoint_path
 
@@ -468,17 +520,16 @@ def train_model_curriculum(
 
     tracker = TokenExposureTracker()
     global_step = 0
-    next_checkpoint_target = get_next_checkpoint_target(
-        tracker.adjusted_seen_tokens_total,
-        checkpoint_interval_tokens,
-    )
 
     fieldnames = [
         "epoch",
         "stage",
-        "global_step",
+        "global_step", #cumulative optimizer steps across all stages
+        "stage_step", # number of optimizer steps within the current stage
         "train_loss",
-        "validation_loss",
+        "validation_loss", # cross entropy
+        "perplexity",
+        "train_validation_gap",# validation_loss - train_loss
         "raw_seen_tokens_total",
         "raw_seen_tokens_eng",
         "raw_seen_tokens_nld",
@@ -487,6 +538,7 @@ def train_model_curriculum(
         "adjusted_seen_tokens_nld",
         "adjusted_seen_tokens_zho",
         "adjusted_seen_tokens_total",
+        "stage_target_adjusted_tokens",
         "checkpoint_path",
     ]
 
@@ -494,15 +546,30 @@ def train_model_curriculum(
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
-        for epoch in range(1, max_epochs + 1):
-            logger.info(f"Starting epoch {epoch}/{max_epochs}")
+        completed_stages = 0
+        last_stage_checkpoint_path = ""
 
-            for stage in stage_loaders:
-                stage_name = stage["name"]
-                train_loader = stage["train_loader"]
-                val_loader = stage["val_loader"]
+        for stage in stage_loaders:
+            stage_name = stage["name"]
+            train_loader = stage["train_loader"]
+            val_loader = stage["val_loader"]
+            target_adjusted_tokens = stage.get("target_adjusted_tokens", None)
+            target_adjusted_tokens = (
+                float(target_adjusted_tokens)
+                if target_adjusted_tokens is not None
+                else None
+            )
+            stage_checkpoint_name = stage.get("checkpoint_name", stage_name)
+            stage_step = 0
+            stage_finished = False
 
-                logger.info(f"Starting stage: {stage_name}")
+            logger.info(
+                f"Starting stage: {stage_name} "
+                f"(target_adjusted_tokens={target_adjusted_tokens})"
+            )
+
+            for epoch in range(1, max_epochs + 1):
+                logger.info(f"Starting epoch {epoch}/{max_epochs} | stage: {stage_name}")
 
                 progress = tqdm(
                     train_loader,
@@ -510,12 +577,16 @@ def train_model_curriculum(
                 )
 
                 for batch in progress:
-                    languages = batch.pop("language")
+                    languages = batch.pop("language", None)
+                    language_ids = batch.pop("language_ids", None)
 
                     batch = {
                         k: v.to(device)
                         for k, v in batch.items()
                     }
+
+                    if language_ids is not None:
+                        language_ids = language_ids.to(device)
 
                     optimizer.zero_grad()
 
@@ -526,37 +597,25 @@ def train_model_curriculum(
                     optimizer.step()
 
                     global_step += 1
+                    stage_step += 1
 
-                    tracker.update(
-                        attention_mask=batch["attention_mask"],
-                        languages=languages,
-                    )
+                    if language_ids is not None:
+                        tracker.update_from_language_ids(
+                            attention_mask=batch["attention_mask"],
+                            language_ids=language_ids,
+                        )
+                    else:
+                        tracker.update(
+                            attention_mask=batch["attention_mask"],
+                            languages=languages,
+                        )
 
                     adjusted_total = tracker.adjusted_seen_tokens_total
                     checkpoint_path = ""
 
-                    if adjusted_total >= next_checkpoint_target:
-                        checkpoint_name = format_checkpoint_name(
-                            next_checkpoint_target
-                        )
-                        checkpoint_path = save_checkpoint(
-                            model=model,
-                            tokenizer=tokenizer,
-                            output_dir=output_dir,
-                            checkpoint_name=checkpoint_name,
-                        )
-
-                        logger.info(
-                            f"Saved checkpoint at adjusted token target "
-                            f"{next_checkpoint_target:,}: {checkpoint_path}"
-                        )
-
-                        next_checkpoint_target = get_next_checkpoint_target(
-                            adjusted_total,
-                            checkpoint_interval_tokens,
-                        )
-
                     validation_loss = ""
+                    perplexity = ""
+                    train_validation_gap = ""
                     if val_loader is not None and global_step % eval_every_steps == 0:
                         validation_loss_value = evaluate(
                             model=model,
@@ -569,13 +628,25 @@ def train_model_curriculum(
                             if validation_loss_value is not None
                             else ""
                         )
+                        if validation_loss_value is not None:
+                            perplexity = (
+                                f"{math.exp(validation_loss_value):.6f}"
+                                if validation_loss_value < 100
+                                else "inf"
+                            )
+                            train_validation_gap = (
+                                f"{validation_loss_value - loss.item():.6f}"
+                            )
 
                     row = {
                         "epoch": epoch,
                         "stage": stage_name,
                         "global_step": global_step,
+                        "stage_step": stage_step,
                         "train_loss": f"{loss.item():.6f}",
                         "validation_loss": validation_loss,
+                        "perplexity": perplexity,
+                        "train_validation_gap": train_validation_gap,
                         "raw_seen_tokens_total": tracker.raw_seen_tokens_total,
                         "raw_seen_tokens_eng": tracker.raw_seen_tokens_eng,
                         "raw_seen_tokens_nld": tracker.raw_seen_tokens_nld,
@@ -584,6 +655,11 @@ def train_model_curriculum(
                         "adjusted_seen_tokens_nld": f"{tracker.adjusted_seen_tokens_nld:.2f}",
                         "adjusted_seen_tokens_zho": f"{tracker.adjusted_seen_tokens_zho:.2f}",
                         "adjusted_seen_tokens_total": f"{tracker.adjusted_seen_tokens_total:.2f}",
+                        "stage_target_adjusted_tokens": (
+                            f"{target_adjusted_tokens:.0f}"
+                            if target_adjusted_tokens is not None
+                            else ""
+                        ),
                         "checkpoint_path": checkpoint_path,
                     }
 
@@ -594,6 +670,75 @@ def train_model_curriculum(
                         "loss": f"{loss.item():.4f}",
                         "adj_tokens": int(tracker.adjusted_seen_tokens_total),
                     })
+
+                    if (
+                        target_adjusted_tokens is not None
+                        and adjusted_total >= target_adjusted_tokens
+                    ):
+                        validation_loss_value = (
+                            evaluate(
+                                model=model,
+                                val_loader=val_loader,
+                                device=device,
+                                max_val_steps=max_val_steps,
+                            )
+                            if val_loader is not None
+                            else None
+                        )
+                        validation_loss = (
+                            f"{validation_loss_value:.6f}"
+                            if validation_loss_value is not None
+                            else ""
+                        )
+                        perplexity = ""
+                        train_validation_gap = ""
+                        if validation_loss_value is not None:
+                            perplexity = (
+                                f"{math.exp(validation_loss_value):.6f}"
+                                if validation_loss_value < 100
+                                else "inf"
+                            )
+                            train_validation_gap = (
+                                f"{validation_loss_value - loss.item():.6f}"
+                            )
+
+                        checkpoint_path = save_checkpoint(
+                            model=model,
+                            tokenizer=tokenizer,
+                            output_dir=output_dir,
+                            checkpoint_name=stage_checkpoint_name,
+                        )
+
+                        writer.writerow({
+                            "epoch": epoch,
+                            "stage": stage_name,
+                            "global_step": global_step,
+                            "stage_step": stage_step,
+                            "train_loss": f"{loss.item():.6f}",
+                            "validation_loss": validation_loss,
+                            "perplexity": perplexity,
+                            "train_validation_gap": train_validation_gap,
+                            "raw_seen_tokens_total": tracker.raw_seen_tokens_total,
+                            "raw_seen_tokens_eng": tracker.raw_seen_tokens_eng,
+                            "raw_seen_tokens_nld": tracker.raw_seen_tokens_nld,
+                            "raw_seen_tokens_zho": tracker.raw_seen_tokens_zho,
+                            "adjusted_seen_tokens_eng": f"{tracker.adjusted_seen_tokens_eng:.2f}",
+                            "adjusted_seen_tokens_nld": f"{tracker.adjusted_seen_tokens_nld:.2f}",
+                            "adjusted_seen_tokens_zho": f"{tracker.adjusted_seen_tokens_zho:.2f}",
+                            "adjusted_seen_tokens_total": f"{tracker.adjusted_seen_tokens_total:.2f}",
+                            "stage_target_adjusted_tokens": f"{target_adjusted_tokens:.0f}",
+                            "checkpoint_path": checkpoint_path,
+                        })
+                        f.flush()
+
+                        logger.info(
+                            f"Finished stage {stage_name} at adjusted tokens "
+                            f"{adjusted_total:.2f}; saved {checkpoint_path}"
+                        )
+
+                        stage_finished = True
+                        last_stage_checkpoint_path = checkpoint_path
+                        break
 
                     if tracker.adjusted_seen_tokens_total >= max_adjusted_token_exposure:
                         logger.info(
@@ -619,6 +764,23 @@ def train_model_curriculum(
                         )
                         logger.info(f"Final checkpoint saved to {final_path}")
                         return
+
+                if stage_finished:
+                    break
+
+            if not stage_finished:
+                logger.warning(
+                    f"Stage {stage_name} ended without reaching target "
+                    f"{target_adjusted_tokens}."
+                )
+            else:
+                completed_stages += 1
+
+        if completed_stages == len(stage_loaders) and last_stage_checkpoint_path:
+            logger.info("Curriculum training finished.")
+            logger.info(f"Final checkpoint saved to {last_stage_checkpoint_path}")
+            logger.info(f"Training log saved to {log_path}")
+            return
 
     final_path = save_checkpoint(
         model=model,

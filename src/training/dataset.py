@@ -661,37 +661,66 @@ def get_curriculum_dataloaders(
     batch_size=8,
     max_length=128,
     mlm_probability=0.15,
-    #val_ratio=0.1,
+    use_packing=False,
+    packing_strategy="wrapped",
+    objective="mlm",
+    insert_eos=False,
+    val_ratio=0.1,
     seed=42,
 ):
     stage_loaders = []
 
     for stage in curriculum_stages:
         stage_name = stage["name"]
-        dataset_path = stage["path"]
-
-        split_dataset = load_from_disk(dataset_path)
-
-        train_hf_dataset = split_dataset["train"]
-        val_hf_dataset = split_dataset["validation"]
+        train_hf_dataset = load_from_disk(stage["train_path"])
+        val_hf_dataset = load_from_disk(stage["val_path"])
 
         print(f"\n[{stage_name}]")
+        print(f"Objective: {objective}")
+        print(f"Use packing: {use_packing}")
+        print(f"Insert EOS: {insert_eos}")
         print(f"Train rows: {len(train_hf_dataset)}")
         print(f"Validation rows: {len(val_hf_dataset)}")
 
-        train_dataset = BabyLMMaskedDataset(
-            hf_dataset=train_hf_dataset,
-            tokenizer_path=tokenizer_path,
-            max_length=max_length,
-            mlm_probability=mlm_probability,
-        )
+        if use_packing:
+            if objective == "mlm":
+                dataset_cls = BabyLMPackedMaskedDataset
+            elif objective == "causal_lm":
+                dataset_cls = BabyLMPackedCausalDataset
+            else:
+                raise ValueError(f"Unknown curriculum objective: {objective}")
 
-        val_dataset = BabyLMMaskedDataset(
-            hf_dataset=val_hf_dataset,
-            tokenizer_path=tokenizer_path,
-            max_length=max_length,
-            mlm_probability=mlm_probability,
-        )
+            train_dataset = dataset_cls(
+                hf_dataset=train_hf_dataset,
+                tokenizer_path=tokenizer_path,
+                max_length=max_length,
+                mlm_probability=mlm_probability,
+                packing_strategy=packing_strategy,
+                insert_eos=insert_eos,
+            )
+
+            val_dataset = dataset_cls(
+                hf_dataset=val_hf_dataset,
+                tokenizer_path=tokenizer_path,
+                max_length=max_length,
+                mlm_probability=mlm_probability,
+                packing_strategy=packing_strategy,
+                insert_eos=insert_eos,
+            )
+        else:
+            train_dataset = BabyLMMaskedDataset(
+                hf_dataset=train_hf_dataset,
+                tokenizer_path=tokenizer_path,
+                max_length=max_length,
+                mlm_probability=mlm_probability,
+            )
+
+            val_dataset = BabyLMMaskedDataset(
+                hf_dataset=val_hf_dataset,
+                tokenizer_path=tokenizer_path,
+                max_length=max_length,
+                mlm_probability=mlm_probability,
+            )
 
         train_loader = DataLoader(
             train_dataset,
@@ -711,6 +740,8 @@ def get_curriculum_dataloaders(
             "name": stage_name,
             "train_loader": train_loader,
             "val_loader": val_loader,
+            "target_adjusted_tokens": stage.get("target_adjusted_tokens"),
+            "checkpoint_name": stage.get("checkpoint_name", stage_name),
         })
 
     return stage_loaders
