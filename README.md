@@ -72,12 +72,7 @@ download raw dataset
 python src/data_pipeline/download.py    
 ```
 
-Generate baseline dataset, adjusting tokenizer and total budget you want
-```bash
-python src/data_pipeline/create_baseline.py
-```
-
-Generate stage curriculum dataset, adjusting TOTAL_BUDGET and vocab_configs (fill the tokenizer you want)
+Generate naive, static, stage curriculum dataset, adjusting TOTAL_BUDGET and vocab_configs (fill the tokenizer you want)
 ```bash
 python src/data_pipeline/clean_and_mix.py
 ```

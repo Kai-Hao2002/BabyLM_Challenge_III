@@ -175,105 +175,59 @@ def get_exact_row_count_for_budget(dataset, target_budget, lang, tokenizer):
 
 from datasets import DatasetDict
 
-def prepare_stage_data(datasets, stage_name, ratios, total_budget, val_ratio, output_base_dir, tokenizer, vocab_name):
+def prepare_stage_data(datasets, stage_name, ratios, total_budget, output_base_dir, tokenizer, vocab_name):
     """
     Create, sample, mix, shuffle, split train/val, and save the dataset for a specific stage.
     """
     logging.info(f"========== Preparing {stage_name} Data ==========")
     logging.info(f"--- Preparing {stage_name} for {vocab_name} ---")
     train_chunks = []
-    val_chunks = []
     
     for lang, ratio in ratios.items():
         # 1. 根據 Byte Premium 計算該語言的 Train Token 預算
         target_budget = total_budget * ratio
         actual_allowed_tokens = calculate_adjusted_tokens(target_budget, lang)
         
-        dataset_lang = datasets[lang]['train'] 
-        shuffled_lang_ds = dataset_lang.shuffle(seed=42) 
+        dataset_lang = datasets[lang]
+        # Use different seeds based on stage names to avoid identical sequences across stages
+        stage_seed = hash(stage_name) % 10000
+        shuffled_lang_ds = dataset_lang.shuffle(seed=stage_seed)
         
         # 2. compute the exact number of rows needed to meet the adjusted token budget using the precise BPE-based calculation
         if stage_name == "Stage_2_Alignment" and lang == 'zho' and "is_aligned" in shuffled_lang_ds.column_names:
             logging.info(f"[{lang}] Enabling Stage 2 Aligned Upsampling...")
-            
             aligned_ds = shuffled_lang_ds.filter(lambda x: x['is_aligned'])
             regular_ds = shuffled_lang_ds.filter(lambda x: not x['is_aligned'])
             
-            # Allocate 50% budget to aligned corpus
             aligned_budget = actual_allowed_tokens * 0.50
-            needed_aligned_rows = get_exact_row_count_for_budget(aligned_ds, aligned_budget, lang, tokenizer)
+            actual_aligned_rows = min(get_exact_row_count_for_budget(aligned_ds, aligned_budget, lang, tokenizer), len(aligned_ds))
             
-            # if the aligned corpus is smaller than the needed rows, we will use all of it and adjust the regular corpus budget accordingly
-            actual_aligned_rows = min(needed_aligned_rows, len(aligned_ds))
-            remaining_budget = actual_allowed_tokens - (aligned_budget * (actual_aligned_rows / max(1, needed_aligned_rows)))
-            
+            remaining_budget = actual_allowed_tokens - (aligned_budget * (actual_aligned_rows / max(1, actual_aligned_rows)))
             needed_regular_rows = get_exact_row_count_for_budget(regular_ds, remaining_budget, lang, tokenizer)
-            needed_val_rows = int((actual_aligned_rows + needed_regular_rows) * val_ratio)
             
-            # Sample and concatenate
             train_aligned = aligned_ds.select(range(actual_aligned_rows))
             train_regular = regular_ds.select(range(needed_regular_rows))
             
-            # Extract Validation data from regular_ds
-            val_sampled = regular_ds.select(range(needed_regular_rows, min(len(regular_ds), needed_regular_rows + needed_val_rows)))
-            
-            # merge train and val for this stage
             train_sampled = concatenate_datasets([train_aligned, train_regular]).shuffle(seed=42)
-            needed_train_rows = len(train_sampled) 
-            
         else:
-            # Stage 1, Stage 3 or non-Chinese languages in Stage 2: use the original precise calculation without aligned upsampling
             needed_train_rows = get_exact_row_count_for_budget(shuffled_lang_ds, actual_allowed_tokens, lang, tokenizer)
-            needed_val_rows = int(needed_train_rows * val_ratio)
-            
-            if (needed_train_rows + needed_val_rows) > len(shuffled_lang_ds):
-                needed_val_rows = len(shuffled_lang_ds) - needed_train_rows
-                
             train_sampled = shuffled_lang_ds.select(range(needed_train_rows))
-            val_sampled = shuffled_lang_ds.select(range(needed_train_rows, needed_train_rows + needed_val_rows))
 
-        # 3. decide val size based on the train size and val_ratio
-        needed_val_rows = int(needed_train_rows * val_ratio)
-        
-        logging.info(f"[{lang}] Train tokens: {actual_allowed_tokens:,} -> Train rows: {needed_train_rows:,} | Val rows: {needed_val_rows:,}")
-        
-        # security check: if the needed rows exceed the dataset length, adjust the val size accordingly
-        if (needed_train_rows + needed_val_rows) > len(shuffled_lang_ds):
-            logging.warning(f"[{lang}] Not enough data for val! Reducing val size.")
-            needed_val_rows = len(shuffled_lang_ds) - needed_train_rows
-
-        # 4. spilt the dataset into train and val based on the calculated row counts
-        train_sampled = shuffled_lang_ds.select(range(needed_train_rows))
-        val_sampled = shuffled_lang_ds.select(range(needed_train_rows, needed_train_rows + needed_val_rows))
-        
-        # process the language column
         if "language" in train_sampled.column_names:
             train_sampled = train_sampled.remove_columns("language")
-            val_sampled = val_sampled.remove_columns("language")
-            
         train_sampled = train_sampled.add_column("language", [lang] * len(train_sampled))
-        val_sampled = val_sampled.add_column("language", [lang] * len(val_sampled))
-        
         train_chunks.append(train_sampled)
-        val_chunks.append(val_sampled)
         
-    # 5. Mix, shuffle, and save the final dataset for this stage
     mixed_train = concatenate_datasets(train_chunks).shuffle(seed=42)
-    mixed_val = concatenate_datasets(val_chunks).shuffle(seed=42)
     
-    # 6. Save the mixed dataset to disk for later training use
-    final_dataset = DatasetDict({
-        'train': mixed_train,
-        'validation': mixed_val
-    })
+    # Save only the train split here, as validation is handled globally!
+    final_dataset = DatasetDict({'train': mixed_train})
     
     scale_folder = "processed_10M" if total_budget <= 10_000_000 else "processed_100M"
     save_path = os.path.join(output_base_dir, scale_folder, vocab_name, stage_name)
     
     final_dataset.save_to_disk(save_path)
-    logging.info(f"✅ {stage_name} Mixed! Train: {len(mixed_train):,} rows, Val: {len(mixed_val):,} rows. Saved to: {save_path}\n")
-    
-    return final_dataset
+    logging.info(f"✅ {stage_name} Train Set Mixed! Rows: {len(mixed_train):,}. Saved to: {save_path}\n")
 
 def main():
     langs = ['eng', 'zho', 'nld']
@@ -324,6 +278,32 @@ def main():
     # 2. Define total budget (10M for prototyping, 100M for official)
     #TOTAL_BUDGET = 100_000_000
     TOTAL_BUDGET = 10_000_000
+
+    global_val_chunks = []
+    global_train_pool = {}
+
+    for lang in langs:
+        
+        shuffled_ds = datasets[lang]['train'].shuffle(seed=42)
+        
+        # 決定驗證集大小 (各語系抽樣 5% 或最多 5000 行)
+        val_size = min(5000, int(len(shuffled_ds) * 0.05))
+        
+        val_slice = shuffled_ds.select(range(val_size))
+        train_slice = shuffled_ds.select(range(val_size, len(shuffled_ds)))
+        
+        if "language" in val_slice.column_names:
+            val_slice = val_slice.remove_columns("language")
+        val_slice = val_slice.add_column("language", [lang] * len(val_slice))
+        
+        global_val_chunks.append(val_slice)
+        global_train_pool[lang] = train_slice
+
+    
+    mixed_global_val = concatenate_datasets(global_val_chunks).shuffle(seed=42)
+    global_val_save_path = "data/global_validation"
+    mixed_global_val.save_to_disk(global_val_save_path)
+    logging.info(f"🚨 Global Validation Set Created Accurately! Rows: {len(mixed_global_val):,}. Saved to: {global_val_save_path}")
 
     # 3. Define staged curriculum ratios
     # ==========================================
@@ -390,11 +370,10 @@ def main():
             stage_budget = TOTAL_BUDGET * config['budget_ratio']
             
             prepare_stage_data(
-                datasets=datasets,
+                datasets=global_train_pool, 
                 stage_name=stage, 
                 ratios=config['lang_ratios'],
                 total_budget=stage_budget,
-                val_ratio=0.1,
                 output_base_dir="data",
                 tokenizer=current_tokenizer,
                 vocab_name=vocab_name       

@@ -3,7 +3,7 @@ import logging
 from datasets import load_from_disk
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders, processors
 
-from clean_and_mix import deep_quality_filter
+from clean_and_mix import normalize_text, tag_aligned_corpus, deep_quality_filter
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -15,8 +15,7 @@ def get_rough_10m_corpus():
     The function returns a list of text samples that can be used to train the custom tokenizer.
     """
     langs = ['eng', 'zho', 'nld']
-    """"
-
+    """
     # 100M budget tokenizer(Only 15M tokens 3% for Chinese, 80% for English, 17% for Dutch)
     budgets = {
         'eng': 12_000_000,  # 80% 
@@ -25,13 +24,12 @@ def get_rough_10m_corpus():
     }
 
     """
-
     # 10M budget tokenizer(Total 10M tokens 5% for Chinese, 75% for English, 20% for Dutch)
     budgets = {
         'eng': 7_500_000, # 75%
         'nld': 2_000_000, # 20%
-        'zho': 500_000.   # 5%
-    }    
+        'zho': 500_000    # 5%
+    }  
     
     training_texts = []
     
@@ -44,6 +42,8 @@ def get_rough_10m_corpus():
         
         accumulated_tokens = 0
         for item in shuffled_ds:
+            item = normalize_text(item, lang)
+            item = tag_aligned_corpus(item, lang)
             text = item['text']
             
             # 1. filter noise with deep_quality_filter
@@ -78,7 +78,7 @@ def train_custom_tokenizer():
 
     # 2. Initialize Byte-Level BPE
     tokenizer = Tokenizer(models.BPE())
-    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=True)
     tokenizer.decoder = decoders.ByteLevel()
     
     # 3. Setup training parameters 
@@ -89,8 +89,8 @@ def train_custom_tokenizer():
     special_tokens = ["<unk>", "<s>", "</s>", "<pad>", "<mask>"] + zh_punctuation
     
     trainer = trainers.BpeTrainer(
-        vocab_size=16000, #for 10M 
-        #vocab_size=32000, # for 100M
+        vocab_size=16000, #for 100M
+        #vocab_size=30000, # for 10M
         special_tokens=special_tokens,
         initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
         show_progress=True
@@ -101,7 +101,14 @@ def train_custom_tokenizer():
     tokenizer.train_from_iterator(batch_iterator(texts), trainer=trainer)
 
     # 5. Add Post-Processor for BOS/EOS tags
-    tokenizer.post_processor = processors.ByteLevel(trim_offsets=False)
+    tokenizer.post_processor = processors.TemplateProcessing(
+        single="<s> $A </s>",
+        pair="<s> $A </s> <s> $B </s>",
+        special_tokens=[
+            ("<s>", tokenizer.token_to_id("<s>")),
+            ("</s>", tokenizer.token_to_id("</s>")),
+        ],
+    )
 
     # 6. Save Model
     os.makedirs("tokenizers", exist_ok=True)
