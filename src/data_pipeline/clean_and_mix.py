@@ -231,130 +231,116 @@ def prepare_stage_data(datasets, stage_name, ratios, total_budget, output_base_d
 
 def main():
     langs = ['eng', 'zho', 'nld']
-    datasets = {}
+    global_train_pool = {}
     
-    # 1. Load and Clean Data
-    for lang in langs:
-        path = f"data/raw/{lang}_dataset"
-        raw_ds = load_from_disk(path)
-
-        train_split = raw_ds['train'] if isinstance(raw_ds, dict) else raw_ds
-        original_size = len(train_split)
-
-        logging.info(f"[{lang.upper()}] Normalization...")
-        # Step A: Normalization 
-        normalized_ds = train_split.map(
-            lambda x: normalize_text(x, lang),
-            load_from_cache_file=False 
-        )
-
-        logging.info(f"[{lang.upper()}] Tagging Aligned Corpus...")
-        tagged_ds = normalized_ds.map(
-            lambda x: tag_aligned_corpus(x, lang),
-            load_from_cache_file=False
-        )
+    # Define unified cache and validation paths
+    pool_base_path = "data/train_pool"
+    val_save_path = "data/global_validation"
+    
+    # Core Check: If all language train pools and the global validation folder exist, skip the cleaning process
+    skip_cleaning = all(os.path.exists(os.path.join(pool_base_path, lang)) for lang in langs) and os.path.exists(val_save_path)
+    
+    if skip_cleaning:
+        logging.info("🚀 ==================================================")
+        logging.info("🚀 existing train_pool and global_validation detected!")
+        logging.info("🚀 automatically loading cache, skipping time-consuming cleaning, deduplication, and splitting steps.")
+        logging.info("🚀 ==================================================")
         
-        logging.info(f"[{lang.upper()}] Filtering...")
-        cleaned_ds = tagged_ds.filter(
-            lambda x: deep_quality_filter(x, lang),
-            load_from_cache_file=False
-        )
+        # 直接從硬碟讀取純淨訓練池 (Directly load the clean train pool from disk)
+        for lang in langs:
+            pool_path = os.path.join(pool_base_path, lang)
+            global_train_pool[lang] = load_from_disk(pool_path)
+            logging.info(f"📦 loaded [{lang.upper()}] clean train pool, rows: {len(global_train_pool[lang]):,}")
+            
+    else:
+        logging.info("⏳ ==================================================")
+        logging.info("⏳ starting full data cleaning, deduplication, and validation split process...")
+        logging.info("⏳ ==================================================")
         
-        logging.info(f"[{lang.upper()}] Deduplicating...")
-        seen_hashes.clear() 
-        deduped_ds = cleaned_ds.filter(
-            is_unique,
-            load_from_cache_file=False
-        )
+        datasets = {}
+        # 1. Original Load and Clean Data Logic
+        for lang in langs:
+            path = f"data/raw/{lang}_dataset"
+            raw_ds = load_from_disk(path)
 
-        cleaned_size = len(deduped_ds)
-        removed_size = original_size - cleaned_size
-        removed_ratio = (removed_size / original_size) * 100 if original_size > 0 else 0
-        
-        datasets[lang] = DatasetDict({'train': deduped_ds})
-        
-        logging.info(f"{lang.upper()} Clean & Dedup Finished: {original_size:,} -> {cleaned_size:,} (Removed {removed_ratio:.2f}%)")
+            train_split = raw_ds['train'] if isinstance(raw_ds, dict) else raw_ds
+            original_size = len(train_split)
 
-    # 2. Define total budget (10M for prototyping, 100M for official)
-    #TOTAL_BUDGET = 100_000_000
+            logging.info(f"[{lang.upper()}] Normalization...")
+            normalized_ds = train_split.map(lambda x: normalize_text(x, lang), load_from_cache_file=False)
+
+            logging.info(f"[{lang.upper()}] Tagging Aligned Corpus...")
+            tagged_ds = normalized_ds.map(lambda x: tag_aligned_corpus(x, lang), load_from_cache_file=False)
+            
+            logging.info(f"[{lang.upper()}] Filtering...")
+            cleaned_ds = tagged_ds.filter(lambda x: deep_quality_filter(x, lang), load_from_cache_file=False)
+            
+            logging.info(f"[{lang.upper()}] Deduplicating...")
+            seen_hashes.clear() 
+            deduped_ds = cleaned_ds.filter(is_unique, load_from_cache_file=False)
+
+            cleaned_size = len(deduped_ds)
+            removed_size = original_size - cleaned_size
+            removed_ratio = (removed_size / original_size) * 100 if original_size > 0 else 0
+            
+            datasets[lang] = DatasetDict({'train': deduped_ds})
+            logging.info(f"{lang.upper()} Clean & Dedup Finished: {original_size:,} -> {cleaned_size:,} (Removed {removed_ratio:.2f}%)")
+
+        # 2. Extract global validation and save caches on first run
+        global_val_chunks = []
+        for lang in langs:
+            shuffled_ds = datasets[lang]['train'].shuffle(seed=42)
+            val_size = min(5000, int(len(shuffled_ds) * 0.05))
+            
+            val_slice = shuffled_ds.select(range(val_size))
+            train_slice = shuffled_ds.select(range(val_size, len(shuffled_ds)))
+            
+            if "language" in val_slice.column_names:
+                val_slice = val_slice.remove_columns("language")
+            val_slice = val_slice.add_column("language", [lang] * len(val_slice))
+            
+            global_val_chunks.append(val_slice)
+            global_train_pool[lang] = train_slice
+
+        # Save the global validation set to data/ root
+        mixed_global_val = concatenate_datasets(global_val_chunks).shuffle(seed=42)
+        mixed_global_val.save_to_disk(val_save_path)
+        logging.info(f"🚨 Global Validation Set Created Accurately! Rows: {len(mixed_global_val):,}. Saved to: {val_save_path}")
+
+        # Persist clean train pool to disk for future skipping
+        os.makedirs(pool_base_path, exist_ok=True)
+        for lang in langs:
+            pool_save_path = os.path.join(pool_base_path, lang)
+            global_train_pool[lang].save_to_disk(pool_save_path)
+            logging.info(f"📦 Saved clean train pool for [{lang.upper()}] to: {pool_save_path}")
+
+    # 3. Define total budget and experiment matrix 
     TOTAL_BUDGET = 10_000_000
 
-    global_val_chunks = []
-    global_train_pool = {}
-
-    for lang in langs:
-        
-        shuffled_ds = datasets[lang]['train'].shuffle(seed=42)
-        
-        # 決定驗證集大小 (各語系抽樣 5% 或最多 5000 行)
-        val_size = min(5000, int(len(shuffled_ds) * 0.05))
-        
-        val_slice = shuffled_ds.select(range(val_size))
-        train_slice = shuffled_ds.select(range(val_size, len(shuffled_ds)))
-        
-        if "language" in val_slice.column_names:
-            val_slice = val_slice.remove_columns("language")
-        val_slice = val_slice.add_column("language", [lang] * len(val_slice))
-        
-        global_val_chunks.append(val_slice)
-        global_train_pool[lang] = train_slice
-
-    
-    mixed_global_val = concatenate_datasets(global_val_chunks).shuffle(seed=42)
-    global_val_save_path = "data/global_validation"
-    mixed_global_val.save_to_disk(global_val_save_path)
-    logging.info(f"🚨 Global Validation Set Created Accurately! Rows: {len(mixed_global_val):,}. Saved to: {global_val_save_path}")
-
-    # 3. Define staged curriculum ratios
-    # ==========================================
-    # Ablation Study Matrix
-    # 16k Tokenizer 
-    # ==========================================
-    
-    # 1. Naive Baseline 
     naive_baseline = {
-        "Baseline_Naive": {
-            'budget_ratio': 1.0, 
-            'lang_ratios': {'eng': 0.334, 'zho': 0.333, 'nld': 0.333}
-        }
+        "Baseline_Naive": {'budget_ratio': 1.0, 'lang_ratios': {'eng': 0.334, 'zho': 0.333, 'nld': 0.333}}
     }
-
-    # 2. Static Baseline 
     static_baseline = {
-        "Baseline_Static": {
-            'budget_ratio': 1.0, 
-            'lang_ratios': {'eng': 0.44, 'zho': 0.33, 'nld': 0.23}
-        }
+        "Baseline_Static": {'budget_ratio': 1.0, 'lang_ratios': {'eng': 0.44, 'zho': 0.33, 'nld': 0.23}}
     }
-
-    # 3. Curriculum 
     curriculum = {
-        "Stage_1_Foundation": {
-            'budget_ratio': 0.30, 
-            'lang_ratios': {'eng': 0.50, 'zho': 0.25, 'nld': 0.25}
-        },
-        "Stage_2_Alignment": {
-            'budget_ratio': 0.30, 
-            'lang_ratios': {'eng': 0.33, 'zho': 0.33, 'nld': 0.34}
-        },
-        "Stage_3_HardBoosting": {
-            'budget_ratio': 0.40, 
-            'lang_ratios': {'eng': 0.20, 'zho': 0.40, 'nld': 0.40}
-        }
+        "Stage_1_Foundation": {'budget_ratio': 0.30, 'lang_ratios': {'eng': 0.50, 'zho': 0.25, 'nld': 0.25}},
+        "Stage_2_Alignment": {'budget_ratio': 0.30, 'lang_ratios': {'eng': 0.33, 'zho': 0.33, 'nld': 0.34}},
+        "Stage_3_HardBoosting": {'budget_ratio': 0.40, 'lang_ratios': {'eng': 0.20, 'zho': 0.40, 'nld': 0.40}}
     }
 
     vocab_configs = {
         "vocab_14k": "tokenizers/tokenizer_10M_14k.json",
         "vocab_16k": "tokenizers/tokenizer_10M_16k.json",
         "vocab_18k": "tokenizers/tokenizer_10M_18k.json",
-        #"vocab_30k": "tokenizers/tokenizer_100M_30k.json",
+        #"vocab_30k": "tokenizers/tokenizer_100M_30k.json",  
         #"vocab_32k": "tokenizers/tokenizer_100M_32k.json",
         #"vocab_34k": "tokenizers/tokenizer_100M_34k.json"
     }
 
-    # 4. Generate Mixed Data
     all_experiments = {**naive_baseline, **static_baseline, **curriculum}
 
+    # 4. 生成混合實驗資料集 (Generate mixed data for ablation matrix)
     for vocab_name, tokenizer_path in vocab_configs.items():
         logging.info(f"\n========================================")
         logging.info(f"🚀 starting data generation for: {vocab_name}")
@@ -370,14 +356,13 @@ def main():
             stage_budget = TOTAL_BUDGET * config['budget_ratio']
             
             prepare_stage_data(
-                datasets=global_train_pool, 
+                datasets=global_train_pool,  
                 stage_name=stage, 
                 ratios=config['lang_ratios'],
                 total_budget=stage_budget,
                 output_base_dir="data",
                 tokenizer=current_tokenizer,
                 vocab_name=vocab_name       
-            )
-            
+            )          
 if __name__ == "__main__":
     main()

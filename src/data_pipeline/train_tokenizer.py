@@ -30,27 +30,27 @@ def get_rough_10m_corpus():
         'nld': 2_000_000, # 20%
         'zho': 500_000    # 5%
     }  
-    
     training_texts = []
     
     for lang in langs:
-        logging.info(f"Sampling raw data for {lang}...")
-        raw_ds = load_from_disk(f"data/raw/{lang}_dataset")
+        logging.info(f"Sampling clean data from split train pool for {lang}...")
         
-        # shuffle the dataset to ensure randomness in sampling, but keep it deterministic with a fixed seed
-        shuffled_ds = raw_ds['train'].shuffle(seed=42)
+        
+        train_pool_path = f"data/train_pool/{lang}"
+        if not os.path.exists(train_pool_path):
+            raise FileNotFoundError(
+                f"❌ Cannot find train pool: {train_pool_path}\n"
+                f"Please run clean_and_mix.py first to generate the train pool!"
+            )
+            
+        # load the pre-cleaned and pre-mixed train pool for the language
+        train_pool_ds = load_from_disk(train_pool_path)
         
         accumulated_tokens = 0
-        for item in shuffled_ds:
-            item = normalize_text(item, lang)
-            item = tag_aligned_corpus(item, lang)
+        
+        for item in train_pool_ds:
             text = item['text']
             
-            # 1. filter noise with deep_quality_filter
-            if not deep_quality_filter(item, lang):
-                continue
-                
-            # 2. approximate token count: For Chinese, we can use character count as a rough proxy for tokens; for English and Dutch, we can use word count.
             if lang == 'zho':
                 estimated_tokens = len(text) 
             else:
@@ -59,9 +59,8 @@ def get_rough_10m_corpus():
             training_texts.append(text)
             accumulated_tokens += estimated_tokens
             
-            # 3. accumulate until we reach the target budget for this language
             if accumulated_tokens >= budgets[lang]:
-                logging.info(f"[{lang}] Gathered ~{accumulated_tokens:,} heuristic tokens.")
+                logging.info(f"[{lang}] Gathered ~{accumulated_tokens:,} heuristic tokens from safe train pool.")
                 break
                 
     return training_texts
