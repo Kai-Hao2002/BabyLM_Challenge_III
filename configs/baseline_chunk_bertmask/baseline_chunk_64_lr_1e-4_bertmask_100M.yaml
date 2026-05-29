@@ -1,15 +1,18 @@
-output_dir: outputs/baseline_chunk_64_lr_1e-4_bertmask_100M
+output_dir: outputs/32k_baseline_chunk_lr_1e-4_100M/baseline_chunk_64_lr_1e-4_bertmask_100M
 seed: 42
 mode: baseline
 
-tokenizer_path: tokenizers/tokenizer_100M_16k.json
+tokenizer_path: tokenizers/tokenizer_100M_32k.json
 
 data_args:
   use_chunking: true
-  train_path: data/processed_100M/vocab_16k/Baseline_Naive/train
-  val_path: data/processed_100M/vocab_16k/Baseline_Naive/validation
+  objective: mlm
+  insert_eos: false
+  train_path: data/processed_100M/vocab_32k/Baseline_Naive/train
+  val_path: data/global_validation
 
 model_args:
+  model_type: bert
   hidden_size: 256
   num_hidden_layers: 4
   num_attention_heads: 4

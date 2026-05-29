@@ -1,17 +1,17 @@
-# output_dir: outputs/baseline_pack_wrapped_128_lr_1e-4_bertmask
-output_dir: outputs/baseline_pack_wrapped_64_lr_1e-4_bertmask_fixedpack
+output_dir: outputs/14k_baseline_pack_wrapped_10M/baseline_pack_wrapped_64_lr_1e-4
 seed: 42
 mode: baseline
 
-tokenizer_path: tokenizers/tokenizer_10M_16k.json
+tokenizer_path: tokenizers/tokenizer_10M_14k.json
 
 data_args:
   use_packing: true
   packing_strategy: wrapped
-  train_path: data/processed_10M/vocab_16k/Baseline_Naive/train
-  val_path: data/processed_10M/vocab_16k/Baseline_Naive/validation
+  train_path: data/processed_10M/vocab_14k/Baseline_Naive/train
+  val_path: data/global_validation
 
 model_args:
+  model_type: bert
   hidden_size: 256
   num_hidden_layers: 4
   num_attention_heads: 4
