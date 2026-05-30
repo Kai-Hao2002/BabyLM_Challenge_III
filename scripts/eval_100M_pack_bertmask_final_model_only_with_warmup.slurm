@@ -294,7 +294,6 @@ for TASK in "${TASKS[@]}"; do
     --limit "$WARMUP_LIMIT" \
     --device "$WARMUP_DEVICE" \
     --output_path "$TASK_WARMUP_DIR/results" \
-    --log_samples \
     > "$TASK_WARMUP_DIR/logs/warmup.out" \
     2> "$TASK_WARMUP_DIR/logs/warmup.err"
 
@@ -550,7 +549,6 @@ for ROOT_DIR in "${ROOTS[@]}"; do
           --batch_size auto \
           --device cuda \
           --output_path "$RESULT_DIR" \
-          --log_samples \
           > "$LOG_DIR/eval.out" \
           2> "$LOG_DIR/eval.err"
 
