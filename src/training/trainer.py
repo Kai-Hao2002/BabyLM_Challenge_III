@@ -292,10 +292,57 @@ def train_model(
         "adjusted_seen_tokens_total",
         "checkpoint_path",
     ]
+    last_train_loss = None
 
     with open(log_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
+
+        def write_final_checkpoint_row(
+            epoch,
+            global_step,
+            train_loss,
+            checkpoint_name="final_model",
+        ):
+            final_validation_loss_value = (
+                evaluate(
+                    model=model,
+                    val_loader=val_loader,
+                    device=device,
+                    max_val_steps=max_val_steps,
+                )
+                if val_loader is not None
+                else None
+            )
+            final_validation_loss = (
+                f"{final_validation_loss_value:.6f}"
+                if final_validation_loss_value is not None
+                else ""
+            )
+            final_path = save_checkpoint(
+                model=model,
+                tokenizer=tokenizer,
+                output_dir=output_dir,
+                checkpoint_name=checkpoint_name,
+            )
+            writer.writerow({
+                "epoch": epoch,
+                "global_step": global_step,
+                "train_loss": f"{train_loss:.6f}",
+                "validation_loss": final_validation_loss,
+                "raw_seen_tokens_total": tracker.raw_seen_tokens_total,
+                "raw_seen_tokens_eng": tracker.raw_seen_tokens_eng,
+                "raw_seen_tokens_nld": tracker.raw_seen_tokens_nld,
+                "raw_seen_tokens_zho": tracker.raw_seen_tokens_zho,
+                "adjusted_seen_tokens_eng": f"{tracker.adjusted_seen_tokens_eng:.2f}",
+                "adjusted_seen_tokens_nld": f"{tracker.adjusted_seen_tokens_nld:.2f}",
+                "adjusted_seen_tokens_zho": f"{tracker.adjusted_seen_tokens_zho:.2f}",
+                "adjusted_seen_tokens_total": f"{tracker.adjusted_seen_tokens_total:.2f}",
+                "checkpoint_path": final_path,
+            })
+            f.flush()
+            logger.info(f"Final validation loss: {final_validation_loss}")
+            return final_path
 
         for epoch in range(1, max_epochs + 1):
             logger.info(f"Starting epoch {epoch}/{max_epochs}")
@@ -318,6 +365,7 @@ def train_model(
 
                 outputs = model(**batch)
                 loss = outputs.loss
+                last_train_loss = loss.item()
 
                 loss.backward()
                 optimizer.step()
@@ -405,66 +453,37 @@ def train_model(
                         f"Stopping: reached adjusted token exposure limit "
                         f"{max_adjusted_token_exposure:,}"
                     )
-
-                    final_validation_loss = ""
-                    if val_loader is not None:
-                        final_validation_loss_value = evaluate(
-                            model=model,
-                            val_loader=val_loader,
-                            device=device,
-                            max_val_steps=max_val_steps,
-                        )
-                        final_validation_loss = (
-                            f"{final_validation_loss_value:.6f}"
-                            if final_validation_loss_value is not None
-                            else ""
-                        )
-
-                    final_path = save_checkpoint(
-                        model=model,
-                        tokenizer=tokenizer,
-                        output_dir=output_dir,
-                        checkpoint_name="final_model",
+                    final_path = write_final_checkpoint_row(
+                        epoch=epoch,
+                        global_step=global_step,
+                        train_loss=last_train_loss,
                     )
-
-                    writer.writerow({
-                        "epoch": epoch,
-                        "global_step": global_step,
-                        "train_loss": f"{loss.item():.6f}",
-                        "validation_loss": final_validation_loss,
-                        "raw_seen_tokens_total": tracker.raw_seen_tokens_total,
-                        "raw_seen_tokens_eng": tracker.raw_seen_tokens_eng,
-                        "raw_seen_tokens_nld": tracker.raw_seen_tokens_nld,
-                        "raw_seen_tokens_zho": tracker.raw_seen_tokens_zho,
-                        "adjusted_seen_tokens_eng": f"{tracker.adjusted_seen_tokens_eng:.2f}",
-                        "adjusted_seen_tokens_nld": f"{tracker.adjusted_seen_tokens_nld:.2f}",
-                        "adjusted_seen_tokens_zho": f"{tracker.adjusted_seen_tokens_zho:.2f}",
-                        "adjusted_seen_tokens_total": f"{tracker.adjusted_seen_tokens_total:.2f}",
-                        "checkpoint_path": final_path,
-                    })
-                    f.flush()
-
-                    logger.info(f"Final validation loss: {final_validation_loss}")
                     logger.info(f"Final checkpoint saved to {final_path}")
                     return
 
                 if max_steps is not None and global_step >= max_steps:
                     logger.info(f"Stopping: reached max_steps={max_steps}")
-                    final_path = save_checkpoint(
-                        model=model,
-                        tokenizer=tokenizer,
-                        output_dir=output_dir,
-                        checkpoint_name="final_model",
+                    final_path = write_final_checkpoint_row(
+                        epoch=epoch,
+                        global_step=global_step,
+                        train_loss=last_train_loss,
                     )
                     logger.info(f"Final checkpoint saved to {final_path}")
                     return
 
-    final_path = save_checkpoint(
-        model=model,
-        tokenizer=tokenizer,
-        output_dir=output_dir,
-        checkpoint_name="final_model",
-    )
+        if last_train_loss is not None:
+            final_path = write_final_checkpoint_row(
+                epoch=epoch,
+                global_step=global_step,
+                train_loss=last_train_loss,
+            )
+        else:
+            final_path = save_checkpoint(
+                model=model,
+                tokenizer=tokenizer,
+                output_dir=output_dir,
+                checkpoint_name="final_model",
+            )
 
     logger.info("Training finished.")
     logger.info(f"Final checkpoint saved to {final_path}")
@@ -491,6 +510,22 @@ def train_model_curriculum(
 
     max_val_steps = int(config.get("max_val_steps", 20))
     eval_every_steps = int(config.get("eval_every_steps", 10))
+    gradient_accumulation_steps = int(
+        config.get("gradient_accumulation_steps", 1)
+    )
+    target_effective_tokens_per_update = config.get(
+        "target_effective_tokens_per_update", None
+    )
+    target_effective_tokens_per_update = (
+        int(target_effective_tokens_per_update)
+        if target_effective_tokens_per_update is not None
+        else None
+    )
+    effective_tokens_per_update = (
+        int(config["batch_size"])
+        * int(config["max_length"])
+        * gradient_accumulation_steps
+    )
 
     max_adjusted_token_exposure = float(
         config.get("max_adjusted_token_exposure", 1_000_000_000)
@@ -504,6 +539,20 @@ def train_model_curriculum(
 
     if max_epochs > 10:
         raise ValueError("BabyLM rule: max_epochs must be <= 10")
+    if gradient_accumulation_steps < 1:
+        raise ValueError("gradient_accumulation_steps must be >= 1")
+    if (
+        target_effective_tokens_per_update is not None
+        and effective_tokens_per_update != target_effective_tokens_per_update
+    ):
+        raise ValueError(
+            "Effective tokens per optimizer update mismatch: "
+            f"batch_size({config['batch_size']}) * "
+            f"max_length({config['max_length']}) * "
+            f"gradient_accumulation_steps({gradient_accumulation_steps}) = "
+            f"{effective_tokens_per_update}, expected "
+            f"{target_effective_tokens_per_update}."
+        )
 
     device = torch.device(
         "cuda" if torch.cuda.is_available()
@@ -512,6 +561,10 @@ def train_model_curriculum(
     )
 
     logger.info(f"Using device: {device}")
+    logger.info(
+        f"Gradient accumulation steps: {gradient_accumulation_steps} | "
+        f"Effective tokens per optimizer update: {effective_tokens_per_update}"
+    )
 
     model.to(device)
     model.train()
@@ -520,16 +573,25 @@ def train_model_curriculum(
 
     tracker = TokenExposureTracker()
     global_step = 0
+    micro_step = 0
+    accumulated_micro_steps = 0
+    accumulated_loss = 0.0
+    optimizer.zero_grad()
 
     fieldnames = [
         "epoch",
         "stage",
         "global_step", #cumulative optimizer steps across all stages
         "stage_step", # number of optimizer steps within the current stage
+        "micro_step",
+        "gradient_accumulation_steps",
+        "effective_tokens_per_update",
         "train_loss",
+        "micro_train_loss",
+        "update_train_loss_avg",
         "validation_loss", # cross entropy
         "perplexity",
-        "train_validation_gap",# validation_loss - train_loss
+        "train_validation_gap",# validation_loss - update_train_loss_avg
         "raw_seen_tokens_total",
         "raw_seen_tokens_eng",
         "raw_seen_tokens_nld",
@@ -545,6 +607,87 @@ def train_model_curriculum(
     with open(log_path, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
+
+        def write_curriculum_checkpoint_row(
+            epoch,
+            stage_name,
+            stage_step,
+            micro_train_loss,
+            update_train_loss_avg,
+            target_adjusted_tokens,
+            val_loader,
+            checkpoint_name,
+        ):
+            validation_loss_value = (
+                evaluate(
+                    model=model,
+                    val_loader=val_loader,
+                    device=device,
+                    max_val_steps=max_val_steps,
+                )
+                if val_loader is not None
+                else None
+            )
+            validation_loss = (
+                f"{validation_loss_value:.6f}"
+                if validation_loss_value is not None
+                else ""
+            )
+            perplexity = ""
+            train_validation_gap = ""
+            if validation_loss_value is not None:
+                perplexity = (
+                    f"{math.exp(validation_loss_value):.6f}"
+                    if validation_loss_value < 100
+                    else "inf"
+                )
+                if update_train_loss_avg != "":
+                    train_validation_gap = (
+                        f"{validation_loss_value - update_train_loss_avg:.6f}"
+                    )
+
+            checkpoint_path = save_checkpoint(
+                model=model,
+                tokenizer=tokenizer,
+                output_dir=output_dir,
+                checkpoint_name=checkpoint_name,
+            )
+            formatted_update_train_loss_avg = (
+                f"{update_train_loss_avg:.6f}"
+                if update_train_loss_avg != ""
+                else ""
+            )
+            writer.writerow({
+                "epoch": epoch,
+                "stage": stage_name,
+                "global_step": global_step,
+                "stage_step": stage_step,
+                "micro_step": micro_step,
+                "gradient_accumulation_steps": gradient_accumulation_steps,
+                "effective_tokens_per_update": effective_tokens_per_update,
+                "train_loss": formatted_update_train_loss_avg,
+                "micro_train_loss": f"{micro_train_loss:.6f}",
+                "update_train_loss_avg": formatted_update_train_loss_avg,
+                "validation_loss": validation_loss,
+                "perplexity": perplexity,
+                "train_validation_gap": train_validation_gap,
+                "raw_seen_tokens_total": tracker.raw_seen_tokens_total,
+                "raw_seen_tokens_eng": tracker.raw_seen_tokens_eng,
+                "raw_seen_tokens_nld": tracker.raw_seen_tokens_nld,
+                "raw_seen_tokens_zho": tracker.raw_seen_tokens_zho,
+                "adjusted_seen_tokens_eng": f"{tracker.adjusted_seen_tokens_eng:.2f}",
+                "adjusted_seen_tokens_nld": f"{tracker.adjusted_seen_tokens_nld:.2f}",
+                "adjusted_seen_tokens_zho": f"{tracker.adjusted_seen_tokens_zho:.2f}",
+                "adjusted_seen_tokens_total": f"{tracker.adjusted_seen_tokens_total:.2f}",
+                "stage_target_adjusted_tokens": (
+                    f"{target_adjusted_tokens:.0f}"
+                    if target_adjusted_tokens is not None
+                    else ""
+                ),
+                "checkpoint_path": checkpoint_path,
+            })
+            f.flush()
+            return checkpoint_path
 
         completed_stages = 0
         last_stage_checkpoint_path = ""
@@ -588,16 +731,18 @@ def train_model_curriculum(
                     if language_ids is not None:
                         language_ids = language_ids.to(device)
 
-                    optimizer.zero_grad()
-
                     outputs = model(**batch)
                     loss = outputs.loss
 
-                    loss.backward()
-                    optimizer.step()
+                    micro_train_loss = loss.item()
+                    accumulated_loss += micro_train_loss
+                    update_train_loss_avg = ""
 
-                    global_step += 1
-                    stage_step += 1
+                    scaled_loss = loss / gradient_accumulation_steps
+                    scaled_loss.backward()
+
+                    micro_step += 1
+                    accumulated_micro_steps += 1
 
                     if language_ids is not None:
                         tracker.update_from_language_ids(
@@ -612,11 +757,29 @@ def train_model_curriculum(
 
                     adjusted_total = tracker.adjusted_seen_tokens_total
                     checkpoint_path = ""
+                    optimizer_updated = (
+                        accumulated_micro_steps == gradient_accumulation_steps
+                    )
+
+                    if optimizer_updated:
+                        optimizer.step()
+                        optimizer.zero_grad()
+                        update_train_loss_avg = (
+                            accumulated_loss / gradient_accumulation_steps
+                        )
+                        accumulated_loss = 0.0
+                        global_step += 1
+                        stage_step += 1
+                        accumulated_micro_steps = 0
 
                     validation_loss = ""
                     perplexity = ""
                     train_validation_gap = ""
-                    if val_loader is not None and global_step % eval_every_steps == 0:
+                    if (
+                        optimizer_updated
+                        and val_loader is not None
+                        and global_step % eval_every_steps == 0
+                    ):
                         validation_loss_value = evaluate(
                             model=model,
                             val_loader=val_loader,
@@ -634,16 +797,27 @@ def train_model_curriculum(
                                 if validation_loss_value < 100
                                 else "inf"
                             )
-                            train_validation_gap = (
-                                f"{validation_loss_value - loss.item():.6f}"
-                            )
+                            if update_train_loss_avg != "":
+                                train_validation_gap = (
+                                    f"{validation_loss_value - update_train_loss_avg:.6f}"
+                                )
 
+                    formatted_update_train_loss_avg = (
+                        f"{update_train_loss_avg:.6f}"
+                        if update_train_loss_avg != ""
+                        else ""
+                    )
                     row = {
                         "epoch": epoch,
                         "stage": stage_name,
                         "global_step": global_step,
                         "stage_step": stage_step,
-                        "train_loss": f"{loss.item():.6f}",
+                        "micro_step": micro_step,
+                        "gradient_accumulation_steps": gradient_accumulation_steps,
+                        "effective_tokens_per_update": effective_tokens_per_update,
+                        "train_loss": formatted_update_train_loss_avg,
+                        "micro_train_loss": f"{micro_train_loss:.6f}",
+                        "update_train_loss_avg": formatted_update_train_loss_avg,
                         "validation_loss": validation_loss,
                         "perplexity": perplexity,
                         "train_validation_gap": train_validation_gap,
@@ -672,64 +846,21 @@ def train_model_curriculum(
                     })
 
                     if (
+                        optimizer_updated
+                        and
                         target_adjusted_tokens is not None
                         and adjusted_total >= target_adjusted_tokens
                     ):
-                        validation_loss_value = (
-                            evaluate(
-                                model=model,
-                                val_loader=val_loader,
-                                device=device,
-                                max_val_steps=max_val_steps,
-                            )
-                            if val_loader is not None
-                            else None
-                        )
-                        validation_loss = (
-                            f"{validation_loss_value:.6f}"
-                            if validation_loss_value is not None
-                            else ""
-                        )
-                        perplexity = ""
-                        train_validation_gap = ""
-                        if validation_loss_value is not None:
-                            perplexity = (
-                                f"{math.exp(validation_loss_value):.6f}"
-                                if validation_loss_value < 100
-                                else "inf"
-                            )
-                            train_validation_gap = (
-                                f"{validation_loss_value - loss.item():.6f}"
-                            )
-
-                        checkpoint_path = save_checkpoint(
-                            model=model,
-                            tokenizer=tokenizer,
-                            output_dir=output_dir,
+                        checkpoint_path = write_curriculum_checkpoint_row(
+                            epoch=epoch,
+                            stage_name=stage_name,
+                            stage_step=stage_step,
+                            micro_train_loss=micro_train_loss,
+                            update_train_loss_avg=update_train_loss_avg,
+                            target_adjusted_tokens=target_adjusted_tokens,
+                            val_loader=val_loader,
                             checkpoint_name=stage_checkpoint_name,
                         )
-
-                        writer.writerow({
-                            "epoch": epoch,
-                            "stage": stage_name,
-                            "global_step": global_step,
-                            "stage_step": stage_step,
-                            "train_loss": f"{loss.item():.6f}",
-                            "validation_loss": validation_loss,
-                            "perplexity": perplexity,
-                            "train_validation_gap": train_validation_gap,
-                            "raw_seen_tokens_total": tracker.raw_seen_tokens_total,
-                            "raw_seen_tokens_eng": tracker.raw_seen_tokens_eng,
-                            "raw_seen_tokens_nld": tracker.raw_seen_tokens_nld,
-                            "raw_seen_tokens_zho": tracker.raw_seen_tokens_zho,
-                            "adjusted_seen_tokens_eng": f"{tracker.adjusted_seen_tokens_eng:.2f}",
-                            "adjusted_seen_tokens_nld": f"{tracker.adjusted_seen_tokens_nld:.2f}",
-                            "adjusted_seen_tokens_zho": f"{tracker.adjusted_seen_tokens_zho:.2f}",
-                            "adjusted_seen_tokens_total": f"{tracker.adjusted_seen_tokens_total:.2f}",
-                            "stage_target_adjusted_tokens": f"{target_adjusted_tokens:.0f}",
-                            "checkpoint_path": checkpoint_path,
-                        })
-                        f.flush()
 
                         logger.info(
                             f"Finished stage {stage_name} at adjusted tokens "
@@ -740,32 +871,52 @@ def train_model_curriculum(
                         last_stage_checkpoint_path = checkpoint_path
                         break
 
-                    if tracker.adjusted_seen_tokens_total >= max_adjusted_token_exposure:
+                    if (
+                        optimizer_updated
+                        and tracker.adjusted_seen_tokens_total
+                        >= max_adjusted_token_exposure
+                    ):
                         logger.info(
                             f"Stopping: reached adjusted token exposure limit "
                             f"{max_adjusted_token_exposure:,}"
                         )
-                        final_path = save_checkpoint(
-                            model=model,
-                            tokenizer=tokenizer,
-                            output_dir=output_dir,
+                        final_path = write_curriculum_checkpoint_row(
+                            epoch=epoch,
+                            stage_name=stage_name,
+                            stage_step=stage_step,
+                            micro_train_loss=micro_train_loss,
+                            update_train_loss_avg=update_train_loss_avg,
+                            target_adjusted_tokens=target_adjusted_tokens,
+                            val_loader=val_loader,
                             checkpoint_name="final_model",
                         )
                         logger.info(f"Final checkpoint saved to {final_path}")
                         return
 
-                    if max_steps is not None and global_step >= max_steps:
+                    if (
+                        optimizer_updated
+                        and max_steps is not None
+                        and global_step >= max_steps
+                    ):
                         logger.info(f"Stopping: reached max_steps={max_steps}")
-                        final_path = save_checkpoint(
-                            model=model,
-                            tokenizer=tokenizer,
-                            output_dir=output_dir,
+                        final_path = write_curriculum_checkpoint_row(
+                            epoch=epoch,
+                            stage_name=stage_name,
+                            stage_step=stage_step,
+                            micro_train_loss=micro_train_loss,
+                            update_train_loss_avg=update_train_loss_avg,
+                            target_adjusted_tokens=target_adjusted_tokens,
+                            val_loader=val_loader,
                             checkpoint_name="final_model",
                         )
                         logger.info(f"Final checkpoint saved to {final_path}")
                         return
 
                 if stage_finished:
+                    if accumulated_micro_steps != 0:
+                        raise RuntimeError(
+                            "Stage finished with incomplete gradient accumulation."
+                        )
                     break
 
             if not stage_finished:

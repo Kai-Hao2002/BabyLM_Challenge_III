@@ -9,7 +9,7 @@ data_args:
   packing_strategy: wrapped
   objective: causal_lm
   insert_eos: true
-  validation_path: data/processed_10M/vocab_16k/Baseline_Naive/validation
+  validation_path: data/global_validation
   curriculum_stages:
     - name: stage_1_foundation
       train_path: data/processed_10M/vocab_16k/Stage_1_Foundation/train
