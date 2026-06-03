@@ -146,6 +146,8 @@ def resave_hf_fast_tokenizer(checkpoint_path, model_max_length=512):
         eos_token="</s>",
         pad_token="<pad>",
         mask_token="<mask>",
+        cls_token="<s>",
+        sep_token="</s>",
         model_max_length=model_max_length,
     )
     hf_tokenizer.save_pretrained(checkpoint_path)

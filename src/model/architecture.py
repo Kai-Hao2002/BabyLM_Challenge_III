@@ -14,7 +14,7 @@ def build_model(vocab_size, config_args):
             intermediate_size=config_args.get("intermediate_size", 1024),
             max_position_embeddings=config_args.get("max_position_embeddings", 512),
             pad_token_id=config_args.get("pad_token_id", 3),
-            type_vocab_size=1,
+            type_vocab_size=config_args.get("type_vocab_size", 2),
         )
 
         return BertForMaskedLM(config)

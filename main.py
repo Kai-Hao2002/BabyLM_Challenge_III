@@ -93,6 +93,8 @@ def main():
             eos_token="</s>",
             pad_token="<pad>",
             mask_token="<mask>",
+            cls_token="<s>",
+            sep_token="</s>",
             model_max_length=model_max_length,
         )
 
@@ -100,6 +102,8 @@ def main():
         logger.info(f"pad: {tokenizer.pad_token} {tokenizer.pad_token_id}")
         logger.info(f"bos: {tokenizer.bos_token} {tokenizer.bos_token_id}")
         logger.info(f"eos: {tokenizer.eos_token} {tokenizer.eos_token_id}")
+        logger.info(f"cls: {tokenizer.cls_token} {tokenizer.cls_token_id}")
+        logger.info(f"sep: {tokenizer.sep_token} {tokenizer.sep_token_id}")
         logger.info(f"mask: {tokenizer.mask_token} {tokenizer.mask_token_id}")
         # --- Step 2: Model Initialization (Member B) ---
         # logger.info("Step 2: Initializing model...")
