@@ -254,6 +254,9 @@ def train_model(
         if checkpoint_interval_tokens is not None
         else None
     )
+    save_intermediate_checkpoints = bool(
+        config.get("save_intermediate_checkpoints", True)
+    )
 
     if max_epochs > 10:
         raise ValueError("BabyLM rule: max_epochs must be <= 10")
@@ -265,6 +268,9 @@ def train_model(
     )
 
     logger.info(f"Using device: {device}")
+    logger.info(
+        f"Save intermediate checkpoints: {save_intermediate_checkpoints}"
+    )
 
     model.to(device)
     model.train()
@@ -274,10 +280,12 @@ def train_model(
     tracker = TokenExposureTracker()
 
     global_step = 0
-    next_checkpoint_target = get_next_checkpoint_target(
-        tracker.adjusted_seen_tokens_total,
-        checkpoint_interval_tokens,
-    )
+    next_checkpoint_target = None
+    if save_intermediate_checkpoints:
+        next_checkpoint_target = get_next_checkpoint_target(
+            tracker.adjusted_seen_tokens_total,
+            checkpoint_interval_tokens,
+        )
 
     fieldnames = [
         "epoch",
@@ -391,7 +399,10 @@ def train_model(
                 checkpoint_path = ""
 
                 # Save checkpoint by adjusted token milestones
-                if adjusted_total >= next_checkpoint_target:
+                if (
+                    save_intermediate_checkpoints
+                    and adjusted_total >= next_checkpoint_target
+                ):
                     checkpoint_name = format_checkpoint_name(next_checkpoint_target)
                     checkpoint_path = save_checkpoint(
                         model=model,
@@ -538,6 +549,9 @@ def train_model_curriculum(
         if checkpoint_interval_tokens is not None
         else None
     )
+    save_intermediate_checkpoints = bool(
+        config.get("save_intermediate_checkpoints", True)
+    )
 
     if max_epochs > 10:
         raise ValueError("BabyLM rule: max_epochs must be <= 10")
@@ -567,6 +581,9 @@ def train_model_curriculum(
         f"Gradient accumulation steps: {gradient_accumulation_steps} | "
         f"Effective tokens per optimizer update: {effective_tokens_per_update}"
     )
+    logger.info(
+        f"Save intermediate checkpoints: {save_intermediate_checkpoints}"
+    )
 
     model.to(device)
     model.train()
@@ -579,6 +596,13 @@ def train_model_curriculum(
     accumulated_micro_steps = 0
     accumulated_loss = 0.0
     optimizer.zero_grad()
+    last_epoch = None
+    last_stage_name = None
+    last_stage_step = None
+    last_micro_train_loss = None
+    last_update_train_loss_avg = ""
+    last_target_adjusted_tokens = None
+    last_val_loader = None
 
     fieldnames = [
         "epoch",
@@ -648,12 +672,14 @@ def train_model_curriculum(
                         f"{validation_loss_value - update_train_loss_avg:.6f}"
                     )
 
-            checkpoint_path = save_checkpoint(
-                model=model,
-                tokenizer=tokenizer,
-                output_dir=output_dir,
-                checkpoint_name=checkpoint_name,
-            )
+            checkpoint_path = ""
+            if checkpoint_name == "final_model" or save_intermediate_checkpoints:
+                checkpoint_path = save_checkpoint(
+                    model=model,
+                    tokenizer=tokenizer,
+                    output_dir=output_dir,
+                    checkpoint_name=checkpoint_name,
+                )
             formatted_update_train_loss_avg = (
                 f"{update_train_loss_avg:.6f}"
                 if update_train_loss_avg != ""
@@ -694,10 +720,11 @@ def train_model_curriculum(
         completed_stages = 0
         last_stage_checkpoint_path = ""
 
-        for stage in stage_loaders:
+        for stage_index, stage in enumerate(stage_loaders):
             stage_name = stage["name"]
             train_loader = stage["train_loader"]
             val_loader = stage["val_loader"]
+            is_last_stage = stage_index == len(stage_loaders) - 1
             target_adjusted_tokens = stage.get("target_adjusted_tokens", None)
             target_adjusted_tokens = (
                 float(target_adjusted_tokens)
@@ -809,6 +836,13 @@ def train_model_curriculum(
                         if update_train_loss_avg != ""
                         else ""
                     )
+                    last_epoch = epoch
+                    last_stage_name = stage_name
+                    last_stage_step = stage_step
+                    last_micro_train_loss = micro_train_loss
+                    last_update_train_loss_avg = update_train_loss_avg
+                    last_target_adjusted_tokens = target_adjusted_tokens
+                    last_val_loader = val_loader
                     row = {
                         "epoch": epoch,
                         "stage": stage_name,
@@ -853,6 +887,11 @@ def train_model_curriculum(
                         target_adjusted_tokens is not None
                         and adjusted_total >= target_adjusted_tokens
                     ):
+                        checkpoint_name = stage_checkpoint_name
+                        if not save_intermediate_checkpoints:
+                            checkpoint_name = (
+                                "final_model" if is_last_stage else stage_checkpoint_name
+                            )
                         checkpoint_path = write_curriculum_checkpoint_row(
                             epoch=epoch,
                             stage_name=stage_name,
@@ -861,16 +900,23 @@ def train_model_curriculum(
                             update_train_loss_avg=update_train_loss_avg,
                             target_adjusted_tokens=target_adjusted_tokens,
                             val_loader=val_loader,
-                            checkpoint_name=stage_checkpoint_name,
+                            checkpoint_name=checkpoint_name,
                         )
 
-                        logger.info(
-                            f"Finished stage {stage_name} at adjusted tokens "
-                            f"{adjusted_total:.2f}; saved {checkpoint_path}"
-                        )
+                        if checkpoint_path:
+                            logger.info(
+                                f"Finished stage {stage_name} at adjusted tokens "
+                                f"{adjusted_total:.2f}; saved {checkpoint_path}"
+                            )
+                        else:
+                            logger.info(
+                                f"Finished stage {stage_name} at adjusted tokens "
+                                f"{adjusted_total:.2f}; intermediate checkpoint skipped"
+                            )
 
                         stage_finished = True
-                        last_stage_checkpoint_path = checkpoint_path
+                        if checkpoint_path:
+                            last_stage_checkpoint_path = checkpoint_path
                         break
 
                     if (
@@ -935,13 +981,25 @@ def train_model_curriculum(
             logger.info(f"Training log saved to {log_path}")
             return
 
-    final_path = save_checkpoint(
-        model=model,
-        tokenizer=tokenizer,
-        output_dir=output_dir,
-        checkpoint_name="final_model",
-    )
+        if last_micro_train_loss is not None:
+            final_path = write_curriculum_checkpoint_row(
+                epoch=last_epoch,
+                stage_name=last_stage_name,
+                stage_step=last_stage_step,
+                micro_train_loss=last_micro_train_loss,
+                update_train_loss_avg=last_update_train_loss_avg,
+                target_adjusted_tokens=last_target_adjusted_tokens,
+                val_loader=last_val_loader,
+                checkpoint_name="final_model",
+            )
+        else:
+            final_path = save_checkpoint(
+                model=model,
+                tokenizer=tokenizer,
+                output_dir=output_dir,
+                checkpoint_name="final_model",
+            )
 
-    logger.info("Curriculum training finished.")
-    logger.info(f"Final checkpoint saved to {final_path}")
-    logger.info(f"Training log saved to {log_path}")
+        logger.info("Curriculum training finished.")
+        logger.info(f"Final checkpoint saved to {final_path}")
+        logger.info(f"Training log saved to {log_path}")
