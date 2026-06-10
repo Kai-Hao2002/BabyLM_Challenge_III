@@ -38,9 +38,9 @@ def model_record_from_checkpoint(ckpt: Path) -> dict:
         rel_ckpt = ckpt
 
     parts = rel_ckpt.parts
-    if len(parts) >= 5 and parts[0] == "outputs" and parts[-3:] == ("checkpoints", "final_model"):
+    if len(parts) >= 5 and parts[0] == "outputs" and parts[-2:] == ("checkpoints", "final_model"):
         experiment_root = parts[1]
-        model_name = parts[-4]
+        model_name = parts[-3]
     elif len(parts) >= 4 and parts[-2:] == ("checkpoints", "final_model"):
         experiment_root = parts[-4]
         model_name = parts[-3]
@@ -124,7 +124,10 @@ def discover_models(roots: list[Path], include_regex: str | None, exclude_regex:
             print(f"[WARN] Missing root: {search_root}")
             continue
 
-        for ckpt in sorted(search_root.glob("*/*/checkpoints/final_model")):
+        candidates = set(search_root.glob("*/checkpoints/final_model"))
+        candidates.update(search_root.glob("*/*/checkpoints/final_model"))
+
+        for ckpt in sorted(candidates):
             if not ckpt.is_dir():
                 continue
             rel_ckpt = ckpt.relative_to(root)
