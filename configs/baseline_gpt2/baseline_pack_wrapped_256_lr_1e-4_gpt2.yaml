@@ -1,15 +1,15 @@
-output_dir: outputs/18k_baseline_gpt2_10M_v2/baseline_pack_wrapped_256_lr_1e-4_gpt2
+output_dir: outputs/16k_baseline_gpt2_10M/baseline_pack_wrapped_256_lr_1e-4_gpt2
 seed: 42
 mode: baseline
 
-tokenizer_path: tokenizers/tokenizer_10M_18k.json
+tokenizer_path: tokenizers/tokenizer_10M_16k.json
 
 data_args:
   use_packing: true
   packing_strategy: wrapped
   objective: causal_lm
   insert_eos: true
-  train_path: data/processed_10M/vocab_18k/Baseline_Naive/train
+  train_path: data/processed_10M/vocab_16k/Baseline_Naive/train
   val_path: data/global_validation
 
 model_args:

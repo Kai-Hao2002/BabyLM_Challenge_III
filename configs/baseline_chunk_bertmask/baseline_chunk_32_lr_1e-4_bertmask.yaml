@@ -1,12 +1,12 @@
-output_dir: outputs/14k_baseline_chunk_10M/baseline_chunk_32_lr_1e-4_bertmask
+output_dir: outputs/16k_baseline_chunk_10M/baseline_chunk_32_lr_1e-4_bertmask
 seed: 42
 mode: baseline
 
-tokenizer_path: tokenizers/tokenizer_10M_14k.json
+tokenizer_path: tokenizers/tokenizer_10M_16k.json
 
 data_args:
   use_chunking: true
-  train_path: data/processed_10M/vocab_14k/Baseline_Naive/train
+  train_path: data/processed_10M/vocab_16k/Baseline_Naive/train
   val_path: data/global_validation
 
 model_args:

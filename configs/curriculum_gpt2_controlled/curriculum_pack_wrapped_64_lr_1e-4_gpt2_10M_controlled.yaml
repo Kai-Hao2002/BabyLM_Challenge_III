@@ -1,4 +1,4 @@
-output_dir: outputs/curriculum_pack_wrapped_gpt2_10M_controlled/curriculum_pack_wrapped_64_lr_1e-4_gpt2_10M_controlled
+output_dir: outputs/curriculum_pack_wrapped_gpt2_10M/curriculum_pack_wrapped_64_lr_1e-4_gpt2_10M
 seed: 42
 mode: curriculum
 
