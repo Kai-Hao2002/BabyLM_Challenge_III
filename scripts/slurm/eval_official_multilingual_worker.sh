@@ -42,6 +42,8 @@ FT_ROOT="$MODEL_OUT/finetune"
 COLLATED_ROOT="$MODEL_OUT/collated"
 LINK_ROOT="$OUT_ROOT/_official_links"
 MODEL_LINK_ROOT="$LINK_ROOT/model_links"
+LM_EVAL_COMPAT="$PROJECT_ROOT/scripts/evaluation/lm_eval_compat.py"
+FINETUNE_COMPAT="$PROJECT_ROOT/scripts/evaluation/finetune_compat.py"
 OFFICIAL_ZS_ROOT="$OFFICIAL_DIR/results/main"
 OFFICIAL_ZS_MODEL_DIR="$OFFICIAL_ZS_ROOT/$EVAL_MODEL_ID"
 OFFICIAL_FT_MODEL_DIR="$OFFICIAL_DIR/finetune/results/$EVAL_MODEL_ID"
@@ -119,6 +121,57 @@ Path("$MODEL_OUT/model_info.json").write_text(json.dumps(info, indent=2) + "\\n"
 PY
 }
 
+write_environment_info () {
+  python3 - "$MODEL_OUT/environment.json" <<'PY'
+import importlib.metadata
+import json
+import platform
+import sys
+from pathlib import Path
+
+packages = ["torch", "transformers", "lm-eval", "datasets", "accelerate", "evaluate"]
+versions = {}
+for package in packages:
+    try:
+        versions[package] = importlib.metadata.version(package)
+    except importlib.metadata.PackageNotFoundError:
+        versions[package] = None
+
+info = {
+    "python": sys.version,
+    "platform": platform.platform(),
+    "packages": versions,
+}
+Path(sys.argv[1]).write_text(json.dumps(info, indent=2) + "\n")
+PY
+}
+
+preflight_environment () {
+  local status_file="$STATUS_ROOT/environment.status"
+  write_environment_info
+
+  python3 - "$LM_EVAL_COMPAT" "$FINETUNE_COMPAT" <<'PY'
+import importlib.util
+import sys
+from pathlib import Path
+
+for module in ("torch", "transformers", "lm_eval", "datasets", "accelerate", "evaluate"):
+    if importlib.util.find_spec(module) is None:
+        raise SystemExit(f"Missing required Python module: {module}")
+
+for path in sys.argv[1:]:
+    if not Path(path).is_file():
+        raise SystemExit(f"Missing compatibility runner: {path}")
+PY
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
+    mark_status "$status_file" "SUCCESS" "environment_file: $MODEL_OUT/environment.json"
+  else
+    mark_status "$status_file" "FAILED" "exit_code: $rc" "environment_file: $MODEL_OUT/environment.json"
+  fi
+  return "$rc"
+}
+
 mark_status () {
   local file="$1"
   local state="$2"
@@ -162,7 +215,7 @@ run_zeroshot_lang () {
   echo "[RUN] zeroshot $lang"
   mark_status "$status_file" "RUNNING" "task: $task"
   cd "$OFFICIAL_DIR" || return 1
-  python3 -m lm_eval \
+  python3 "$LM_EVAL_COMPAT" \
     --model hf \
     --model_args "pretrained=$MODEL_ARG,tokenizer=$MODEL_ARG,trust_remote_code=True" \
     --tasks "$task" \
@@ -239,7 +292,7 @@ run_finetune_task () {
   echo "[RUN] finetune $lang/$task"
   mark_status "$status_file" "RUNNING" "task: $task" "language: $lang"
   cd "$OFFICIAL_DIR" || return 1
-  python3 finetune/finetune_classification.py \
+  python3 "$FINETUNE_COMPAT" "$OFFICIAL_DIR/finetune/finetune_classification.py" \
     --model_name_or_path "$MODEL_ARG" \
     --language "$lang" \
     --output_dir "finetune/results/$EVAL_MODEL_ID/$lang/$task" \
@@ -273,20 +326,23 @@ run_finetune_task () {
 collate_results () {
   local log_dir="$LOG_ROOT/collate"
   local status_file="$STATUS_ROOT/collate.status"
+  local submission_file="$COLLATED_ROOT/${EVAL_MODEL_ID}_submission.json"
+  local predictions_file="$COLLATED_ROOT/${EVAL_MODEL_ID}_predictions.json"
   mkdir -p "$log_dir"
+  rm -f "$submission_file" "$predictions_file"
   cd "$OFFICIAL_DIR" || return 1
   python3 scripts/collate_results.py \
     --model_name "$EVAL_MODEL_ID" \
-    --output "$COLLATED_ROOT/${EVAL_MODEL_ID}_submission.json" \
-    --output_predictions "$COLLATED_ROOT/${EVAL_MODEL_ID}_predictions.json" \
+    --output "$submission_file" \
+    --output_predictions "$predictions_file" \
     > "$log_dir/collate.out" 2> "$log_dir/collate.err"
   local rc=$?
   cd "$PROJECT_ROOT" || exit 1
-  if [ "$rc" -eq 0 ]; then
-    mark_status "$status_file" "SUCCESS" "submission: $COLLATED_ROOT/${EVAL_MODEL_ID}_submission.json"
+  if [ "$rc" -eq 0 ] && [ -s "$submission_file" ] && [ -s "$predictions_file" ]; then
+    mark_status "$status_file" "SUCCESS" "submission: $submission_file" "predictions: $predictions_file"
     echo "[SUCCESS] collate"
   else
-    mark_status "$status_file" "FAILED" "exit_code: $rc" "stderr_tail: $(tail -n 40 "$log_dir/collate.err" | tr '\n' '|')"
+    mark_status "$status_file" "FAILED" "exit_code: $rc" "submission_exists: $([ -s "$submission_file" ] && echo yes || echo no)" "predictions_exists: $([ -s "$predictions_file" ] && echo yes || echo no)" "stderr_tail: $(tail -n 40 "$log_dir/collate.err" | tr '\n' '|')"
     echo "[FAILED] collate"
   fi
 }
@@ -305,6 +361,10 @@ fi
 MODEL_ARG=$(prepare_model_arg "$ABS_MODEL_PATH")
 ensure_finetune_link
 write_model_info
+if ! preflight_environment; then
+  echo "[FATAL] Evaluation environment preflight failed. See $MODEL_OUT/environment.json"
+  exit 1
+fi
 
 echo "============================================================"
 echo "BabyLM official multilingual evaluation"

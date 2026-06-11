@@ -228,6 +228,8 @@ def main() -> int:
     parser.add_argument("--worker", default="scripts/slurm/eval_official_multilingual_worker.sh")
     parser.add_argument("--submit", action="store_true", help="Actually call sbatch. Omit for dry-run.")
     parser.add_argument("--limit", type=int, help="Only use the first N discovered models.")
+    parser.add_argument("--max-submit", type=int,
+                        help="Submit at most N jobs from the discovered model list.")
 
     parser.add_argument("--partition", default="lrz-v100x2")
     parser.add_argument("--gpus", default="1")
@@ -273,10 +275,26 @@ def main() -> int:
 
     submitted_path = run_dir / "submitted_jobs.tsv"
     with submitted_path.open("w") as f:
-        f.write("job_id\teval_model_id\tmodel_path\n")
-        for model in models:
-            job_id = submit_job(args, args.run_id, model)
-            f.write(f"{job_id}\t{model['eval_model_id']}\t{model['model_path']}\n")
+        f.write("status\tjob_id\teval_model_id\tmodel_path\tmessage\n")
+        submit_models = models[: args.max_submit] if args.max_submit is not None else models
+        for model in submit_models:
+            try:
+                job_id = submit_job(args, args.run_id, model)
+            except subprocess.CalledProcessError as exc:
+                stdout = (exc.stdout or "").strip()
+                stderr = (exc.stderr or "").strip()
+                message = stderr or stdout or f"sbatch exited with code {exc.returncode}"
+                f.write(f"FAILED_SUBMIT\t\t{model['eval_model_id']}\t{model['model_path']}\t{message}\n")
+                print(f"[SUBMIT FAILED] {model['eval_model_id']}")
+                print(f"[SBATCH EXIT] {exc.returncode}")
+                if stdout:
+                    print(f"[SBATCH STDOUT]\n{stdout}")
+                if stderr:
+                    print(f"[SBATCH STDERR]\n{stderr}")
+                print(f"[INFO] Submission log: {submitted_path}")
+                return exc.returncode
+
+            f.write(f"SUBMITTED\t{job_id}\t{model['eval_model_id']}\t{model['model_path']}\t\n")
             print(f"[SUBMITTED] {job_id}: {model['eval_model_id']}")
 
     print(f"[INFO] Submitted jobs: {submitted_path}")

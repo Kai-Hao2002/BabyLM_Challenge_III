@@ -159,3 +159,12 @@ outputs/evaluations/official_multilingual/models/<eval_model_id>/status/
   collation code treats `__` specially in zero-shot result folder names.
 - BERT-style non-GPT checkpoints are evaluated through a local `gpt_bert_...`
   symlink, matching the convention used by the existing project Slurm scripts.
+- The worker runs `lm-eval` and the official finetune script through small
+  compatibility runners in `scripts/evaluation/`. These provide API aliases
+  needed when the installed `lm-eval`, the official evaluation script, and the
+  installed Transformers release expect different symbol names.
+- Every model output contains `environment.json` with the Python and package
+  versions used by its Slurm job. Environment import failures are reported in
+  `status/environment.status` before any task is started.
+- Collation is only marked successful when both the submission and predictions
+  JSON files were actually created and are non-empty.
