@@ -9,7 +9,11 @@ import transformers
 
 
 def install_transformers_compat() -> None:
-    if hasattr(transformers, "AutoModelForVision2Seq"):
+    try:
+        transformers.AutoModelForVision2Seq
+    except AttributeError:
+        pass
+    else:
         return
 
     fallback = getattr(transformers, "AutoModelForImageTextToText", None)
@@ -20,7 +24,12 @@ def install_transformers_compat() -> None:
             "lm-eval expects transformers.AutoModelForVision2Seq, but this "
             "Transformers installation has no compatible auto-model class."
         )
-    transformers.AutoModelForVision2Seq = fallback
+    # Transformers is a _LazyModule in recent releases. Direct setattr can be
+    # shadowed by its custom attribute loader, so install the alias in the
+    # module dictionary explicitly.
+    transformers.__dict__["AutoModelForVision2Seq"] = fallback
+    if getattr(transformers, "AutoModelForVision2Seq", None) is None:
+        raise RuntimeError("Failed to install the AutoModelForVision2Seq compatibility alias.")
 
 
 install_transformers_compat()
