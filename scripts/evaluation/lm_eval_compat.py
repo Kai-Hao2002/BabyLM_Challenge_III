@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import runpy
+import sys
+import types
 
 import transformers
 
@@ -32,5 +34,18 @@ def install_transformers_compat() -> None:
         raise RuntimeError("Failed to install the AutoModelForVision2Seq compatibility alias.")
 
 
+def disable_unused_visual_backends() -> None:
+    """Skip lm-eval visual backends that are irrelevant to text evaluation.
+
+    Some lm-eval releases import every backend eagerly. Their visual modules
+    can require Transformers symbols that moved between releases, preventing
+    even the plain text `hf` backend from starting. Pre-registering empty
+    modules keeps those optional backends out of this text-only evaluation.
+    """
+    for module_name in ("lm_eval.models.hf_vlms", "lm_eval.models.vllm_vlms"):
+        sys.modules.setdefault(module_name, types.ModuleType(module_name))
+
+
 install_transformers_compat()
+disable_unused_visual_backends()
 runpy.run_module("lm_eval.__main__", run_name="__main__")
