@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import importlib
 import runpy
 import sys
 import types
@@ -10,13 +11,24 @@ import types
 import transformers
 
 
-def install_transformers_compat() -> None:
+class TransformersCompatProxy:
+    """Delegate to Transformers while preserving moved compatibility names."""
+
+    def __init__(self, module, vision_model_class):
+        self._module = module
+        self.AutoModelForVision2Seq = vision_model_class
+
+    def __getattr__(self, name):
+        return getattr(self._module, name)
+
+
+def install_transformers_compat():
     try:
         transformers.AutoModelForVision2Seq
     except AttributeError:
         pass
     else:
-        return
+        return transformers.AutoModelForVision2Seq
 
     fallback = getattr(transformers, "AutoModelForImageTextToText", None)
     if fallback is None:
@@ -32,6 +44,7 @@ def install_transformers_compat() -> None:
     transformers.__dict__["AutoModelForVision2Seq"] = fallback
     if getattr(transformers, "AutoModelForVision2Seq", None) is None:
         raise RuntimeError("Failed to install the AutoModelForVision2Seq compatibility alias.")
+    return fallback
 
 
 def disable_unused_visual_backends() -> None:
@@ -46,6 +59,13 @@ def disable_unused_visual_backends() -> None:
         sys.modules.setdefault(module_name, types.ModuleType(module_name))
 
 
-install_transformers_compat()
+vision_model_class = install_transformers_compat()
 disable_unused_visual_backends()
+
+# lm-eval's text HuggingFace backend dynamically reads visual model classes in
+# _model_call, even for text-only models. Give that module a stable proxy so a
+# Transformers lazy-module refresh cannot discard the compatibility alias.
+huggingface_backend = importlib.import_module("lm_eval.models.huggingface")
+huggingface_backend.transformers = TransformersCompatProxy(transformers, vision_model_class)
+
 runpy.run_module("lm_eval.__main__", run_name="__main__")

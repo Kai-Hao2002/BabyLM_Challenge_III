@@ -1,0 +1,8 @@
+# Versions verified with the BabyLM 2026 multilingual evaluation pipeline.
+# Install PyTorch separately using the CUDA build provided on the target cluster.
+lm-eval==0.4.9
+transformers==4.57.6
+datasets==4.8.5
+accelerate==1.13.0
+evaluate==0.4.6
+statsmodels

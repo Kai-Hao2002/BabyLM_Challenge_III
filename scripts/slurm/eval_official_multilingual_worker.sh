@@ -152,6 +152,7 @@ preflight_environment () {
 
   python3 - "$LM_EVAL_COMPAT" "$FINETUNE_COMPAT" <<'PY'
 import importlib.util
+import importlib.metadata
 import sys
 from pathlib import Path
 
@@ -162,6 +163,17 @@ for module in ("torch", "transformers", "lm_eval", "datasets", "accelerate", "ev
 for path in sys.argv[1:]:
     if not Path(path).is_file():
         raise SystemExit(f"Missing compatibility runner: {path}")
+
+transformers_version = importlib.metadata.version("transformers")
+try:
+    transformers_major = int(transformers_version.split(".", 1)[0])
+except ValueError:
+    raise SystemExit(f"Cannot parse Transformers version: {transformers_version}")
+if transformers_major >= 5:
+    raise SystemExit(
+        "BabyLM lm-eval 0.4.9 requires Transformers 4.x; found "
+        f"{transformers_version}. Install requirements-evaluation.txt."
+    )
 PY
   local rc=$?
   if [ "$rc" -eq 0 ]; then
@@ -308,7 +320,6 @@ run_finetune_task () {
     --patience "$FT_PATIENCE" \
     --eval_strategy epoch \
     --save_strategy epoch \
-    --overwrite_output_dir \
     --seed "$FT_SEED" \
     > "$log_dir/finetune.out" 2> "$log_dir/finetune.err"
   local rc=$?

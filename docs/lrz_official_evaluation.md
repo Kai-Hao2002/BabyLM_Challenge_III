@@ -24,6 +24,29 @@ Limit to one model while testing:
 python scripts/lrz_eval_launcher.py --limit 1
 ```
 
+## Evaluation Environment
+
+Use the pinned evaluation dependencies. The official `lm-eval==0.4.9`
+pipeline is not compatible with Transformers 5.x:
+
+```bash
+conda activate babylm
+python -m pip install -r requirements-evaluation.txt
+```
+
+The verified package combination includes:
+
+```text
+transformers==4.57.6
+lm-eval==0.4.9
+datasets==4.8.5
+accelerate==1.13.0
+evaluate==0.4.6
+```
+
+PyTorch is intentionally not pinned in this file; keep the CUDA-compatible
+build provided for the LRZ environment.
+
 Filter by experiment/model name:
 
 ```bash
