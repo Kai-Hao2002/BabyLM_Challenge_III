@@ -662,6 +662,7 @@ def get_curriculum_dataloaders(
     max_length=128,
     mlm_probability=0.15,
     use_packing=False,
+    use_chunking=False,
     packing_strategy="wrapped",
     objective="mlm",
     insert_eos=False,
@@ -669,6 +670,9 @@ def get_curriculum_dataloaders(
     val_ratio=0.1,
     seed=42,
 ):
+    if use_packing and use_chunking:
+        raise ValueError("Only one of use_packing or use_chunking can be true.")
+
     stage_loaders = []
 
     for stage in curriculum_stages:
@@ -680,6 +684,7 @@ def get_curriculum_dataloaders(
         print(f"\n[{stage_name}]")
         print(f"Objective: {objective}")
         print(f"Use packing: {use_packing}")
+        print(f"Use chunking: {use_chunking}")
         print(f"Insert EOS: {insert_eos}")
         print(f"Validation path: {stage_val_path}")
         print(f"Train rows: {len(train_hf_dataset)}")
@@ -709,6 +714,23 @@ def get_curriculum_dataloaders(
                 mlm_probability=mlm_probability,
                 packing_strategy=packing_strategy,
                 insert_eos=insert_eos,
+            )
+        elif use_chunking:
+            if objective != "mlm":
+                raise ValueError("Chunked curriculum currently supports objective='mlm' only.")
+
+            train_dataset = BabyLMChunkedMaskedDataset(
+                hf_dataset=train_hf_dataset,
+                tokenizer_path=tokenizer_path,
+                max_length=max_length,
+                mlm_probability=mlm_probability,
+            )
+
+            val_dataset = BabyLMChunkedMaskedDataset(
+                hf_dataset=val_hf_dataset,
+                tokenizer_path=tokenizer_path,
+                max_length=max_length,
+                mlm_probability=mlm_probability,
             )
         else:
             train_dataset = BabyLMMaskedDataset(

@@ -187,6 +187,7 @@ def main():
                 max_length=config["training_args"]["max_length"],
                 mlm_probability=config["training_args"].get("mlm_probability", 0.15),
                 use_packing=config["data_args"].get("use_packing", False),
+                use_chunking=config["data_args"].get("use_chunking", False),
                 packing_strategy=config["data_args"].get("packing_strategy", "wrapped"),
                 objective=config["data_args"].get("objective", "mlm"), #預設用mlm
                 insert_eos=config["data_args"].get("insert_eos", False), #eos預設false
