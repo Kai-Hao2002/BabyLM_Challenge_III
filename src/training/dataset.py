@@ -81,6 +81,119 @@ def build_paired_wrapped_packed_samples(
 
     return packed_samples
 
+
+def build_bfd_split_packed_samples(
+    hf_dataset,
+    tokenizer,
+    max_length,
+    lang_to_id,
+    insert_eos=True,
+    eos_language_id=-100,
+):
+    if max_length <= 0:
+        raise ValueError("max_length must be positive.")
+
+    eos_id = tokenizer.eos_token_id if insert_eos else None
+    eos_extra = 1 if eos_id is not None else 0
+    max_content_length = max_length - eos_extra
+
+    if max_content_length <= 0:
+        raise ValueError(
+            "max_length is too small for BFD-Split with EOS insertion."
+        )
+
+    chunks = []
+
+    for idx, item in enumerate(hf_dataset):
+        text = item["text"]
+        lang = item["language"]
+
+        if lang not in lang_to_id:
+            raise ValueError(f"Unknown language: {lang}")
+
+        lang_id = lang_to_id[lang]
+        token_ids = tokenizer(
+            text,
+            add_special_tokens=False,
+        )["input_ids"]
+
+        for start in range(0, len(token_ids), max_content_length):
+            content_ids = token_ids[start:start + max_content_length]
+
+            if len(content_ids) == 0:
+                continue
+
+            input_ids = list(content_ids)
+            language_ids = [lang_id] * len(content_ids)
+
+            if eos_id is not None:
+                input_ids.append(eos_id)
+                language_ids.append(eos_language_id)
+
+            if len(input_ids) > max_length:
+                raise ValueError(
+                    "BFD-Split chunk exceeded max_length. "
+                    "Check EOS reservation logic."
+                )
+
+            chunks.append({
+                "input_ids": input_ids,
+                "language_ids": language_ids,
+                "length": len(input_ids),
+            })
+
+        if idx % 1000 == 0:
+            print(f"Tokenized {idx} rows")
+
+    chunks.sort(key=lambda x: x["length"], reverse=True)
+
+    bins = []
+
+    for chunk in chunks:
+        best_bin = None
+        best_remaining_after = None
+
+        for packed_bin in bins:
+            remaining = max_length - packed_bin["length"]
+            if chunk["length"] <= remaining:
+                remaining_after = remaining - chunk["length"]
+                if (
+                    best_remaining_after is None
+                    or remaining_after < best_remaining_after
+                ):
+                    best_bin = packed_bin
+                    best_remaining_after = remaining_after
+
+        if best_bin is None:
+            bins.append({
+                "input_ids": list(chunk["input_ids"]),
+                "language_ids": list(chunk["language_ids"]),
+                "length": chunk["length"],
+            })
+        else:
+            best_bin["input_ids"].extend(chunk["input_ids"])
+            best_bin["language_ids"].extend(chunk["language_ids"])
+            best_bin["length"] += chunk["length"]
+
+    packed_samples = []
+    for packed_bin in bins:
+        input_ids = packed_bin["input_ids"]
+        language_ids = packed_bin["language_ids"]
+
+        if len(input_ids) > max_length:
+            raise ValueError("BFD-Split bin exceeded max_length.")
+
+        if len(input_ids) != len(language_ids):
+            raise ValueError("input_ids and language_ids length mismatch.")
+
+        packed_samples.append({
+            "input_ids": input_ids,
+            "language_ids": language_ids,
+        })
+
+    return packed_samples
+
+
 def mask_tokens_bert_style(input_ids, tokenizer, mlm_probability):
     labels = input_ids.clone()
 
@@ -460,27 +573,40 @@ class BabyLMPackedBaseDataset(TorchDataset):
         self.mlm_probability = mlm_probability
         self.insert_eos = insert_eos
 
-        if packing_strategy != "wrapped":
-            raise ValueError(
-                "Only packing_strategy='wrapped' is supported by paired packing."
-            )
-
         print("Tokenizing dataset for packed training...")
         print("Packing dataset...")
         print(f"Packing strategy: {packing_strategy}")
         print(f"Sequence length: {max_length}")
 
-        self.packed_dataset = build_paired_wrapped_packed_samples(
-            hf_dataset=hf_dataset,
-            tokenizer=self.tokenizer,
-            max_length=max_length,
-            lang_to_id=LANG_TO_ID,
-            insert_eos=insert_eos,
-            eos_language_id=-100,
-            drop_last=True,
-        )
+        if packing_strategy == "wrapped":
+            self.packed_dataset = build_paired_wrapped_packed_samples(
+                hf_dataset=hf_dataset,
+                tokenizer=self.tokenizer,
+                max_length=max_length,
+                lang_to_id=LANG_TO_ID,
+                insert_eos=insert_eos,
+                eos_language_id=-100,
+                drop_last=True,
+            )
+        elif packing_strategy == "bfd_split":
+            self.packed_dataset = build_bfd_split_packed_samples(
+                hf_dataset=hf_dataset,
+                tokenizer=self.tokenizer,
+                max_length=max_length,
+                lang_to_id=LANG_TO_ID,
+                insert_eos=insert_eos,
+                eos_language_id=-100,
+            )
+        else:
+            raise ValueError(
+                "Unsupported packing_strategy. "
+                "Expected 'wrapped' or 'bfd_split'."
+            )
         print("Packed dataset created.")
         print(f"Packed samples: {len(self.packed_dataset)}")
+
+        if len(self.packed_dataset) == 0:
+            raise ValueError("Packed dataset is empty.")
 
         first = self.packed_dataset[0]
         print("Packed sample keys:", first.keys())

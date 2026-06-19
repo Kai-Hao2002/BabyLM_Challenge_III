@@ -1,0 +1,37 @@
+output_dir: outputs/32k_baseline_bfd_split_gpt2_100M/baseline_bfd_split_128_lr_1e-4_gpt2_100M
+seed: 42
+mode: baseline
+
+tokenizer_path: tokenizers/tokenizer_100M_32k.json
+
+data_args:
+  use_packing: true
+  packing_strategy: bfd_split
+  objective: causal_lm
+  insert_eos: true
+  train_path: data/processed_100M/vocab_32k/Baseline_Naive/train
+  val_path: data/global_validation
+
+model_args:
+  model_type: gpt2
+  n_embd: 768
+  n_layer: 12
+  n_head: 12
+  n_inner: 3072
+  n_positions: 512
+  n_ctx: 512
+  pad_token_id: 3
+  bos_token_id: 1
+  eos_token_id: 2
+
+training_args:
+  batch_size: 4
+  max_length: 128
+  learning_rate: 0.0001
+  max_epochs: 1
+  max_steps:
+  eval_every_steps: 1000
+  max_val_steps: 20
+  max_adjusted_token_exposure: 100000000
+  checkpoint_interval_tokens: 10000000
+  save_intermediate_checkpoints: false
