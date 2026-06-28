@@ -103,6 +103,39 @@ class TokenExposureTracker:
         )
 
 
+def compute_adjusted_token_delta(attention_mask, languages=None, language_ids=None):
+    if language_ids is not None:
+        valid_mask = attention_mask.bool()
+        eng_tokens = ((language_ids == 0) & valid_mask).sum().item()
+        nld_tokens = ((language_ids == 1) & valid_mask).sum().item()
+        zho_tokens = ((language_ids == 2) & valid_mask).sum().item()
+    else:
+        if languages is None:
+            raise ValueError("languages or language_ids must be provided.")
+
+        eng_tokens = 0
+        nld_tokens = 0
+        zho_tokens = 0
+        tokens_per_sample = attention_mask.sum(dim=1).detach().cpu().tolist()
+
+        for tokens, lang in zip(tokens_per_sample, languages):
+            tokens = int(tokens)
+            if lang == "eng":
+                eng_tokens += tokens
+            elif lang == "nld":
+                nld_tokens += tokens
+            elif lang == "zho":
+                zho_tokens += tokens
+            else:
+                raise ValueError(f"Unknown language label: {lang}")
+
+    return (
+        eng_tokens * BYTE_PREMIUM["eng"]
+        + nld_tokens * BYTE_PREMIUM["nld"]
+        + zho_tokens * BYTE_PREMIUM["zho"]
+    )
+
+
 def get_next_checkpoint_target(current_adjusted_tokens, checkpoint_interval_tokens=None):
     """
     Official-style checkpoint schedule:
@@ -370,6 +403,37 @@ def train_model(
 
                 if language_ids is not None:
                     language_ids = language_ids.to(device)
+
+                batch_adjusted_delta = compute_adjusted_token_delta(
+                    attention_mask=batch["attention_mask"],
+                    languages=languages,
+                    language_ids=language_ids,
+                )
+                if (
+                    tracker.adjusted_seen_tokens_total + batch_adjusted_delta
+                    > max_adjusted_token_exposure
+                ):
+                    logger.info(
+                        "Stopping before next batch: adjusted token exposure "
+                        f"would exceed {max_adjusted_token_exposure:,} "
+                        f"(current={tracker.adjusted_seen_tokens_total:.2f}, "
+                        f"batch_delta={batch_adjusted_delta:.2f})"
+                    )
+                    if last_train_loss is not None:
+                        final_path = write_final_checkpoint_row(
+                            epoch=epoch,
+                            global_step=global_step,
+                            train_loss=last_train_loss,
+                        )
+                    else:
+                        final_path = save_checkpoint(
+                            model=model,
+                            tokenizer=tokenizer,
+                            output_dir=output_dir,
+                            checkpoint_name="final_model",
+                        )
+                    logger.info(f"Final checkpoint saved to {final_path}")
+                    return
 
                 optimizer.zero_grad()
 
@@ -759,6 +823,81 @@ def train_model_curriculum(
 
                     if language_ids is not None:
                         language_ids = language_ids.to(device)
+
+                    batch_adjusted_delta = compute_adjusted_token_delta(
+                        attention_mask=batch["attention_mask"],
+                        languages=languages,
+                        language_ids=language_ids,
+                    )
+                    current_adjusted_total = tracker.adjusted_seen_tokens_total
+                    would_exceed_stage = (
+                        target_adjusted_tokens is not None
+                        and current_adjusted_total + batch_adjusted_delta
+                        > target_adjusted_tokens
+                    )
+                    would_exceed_global = (
+                        current_adjusted_total + batch_adjusted_delta
+                        > max_adjusted_token_exposure
+                    )
+
+                    if would_exceed_stage or would_exceed_global:
+                        optimizer.zero_grad()
+                        accumulated_loss = 0.0
+                        accumulated_micro_steps = 0
+
+                        limit = (
+                            max_adjusted_token_exposure
+                            if would_exceed_global
+                            else target_adjusted_tokens
+                        )
+                        logger.info(
+                            "Stopping before next batch: adjusted token "
+                            f"exposure would exceed {limit:,.0f} "
+                            f"(current={current_adjusted_total:.2f}, "
+                            f"batch_delta={batch_adjusted_delta:.2f})"
+                        )
+
+                        checkpoint_name = stage_checkpoint_name
+                        if would_exceed_global or is_last_stage:
+                            checkpoint_name = "final_model"
+
+                        if last_micro_train_loss is not None:
+                            checkpoint_path = write_curriculum_checkpoint_row(
+                                epoch=last_epoch,
+                                stage_name=last_stage_name,
+                                stage_step=last_stage_step,
+                                micro_train_loss=last_micro_train_loss,
+                                update_train_loss_avg=last_update_train_loss_avg,
+                                target_adjusted_tokens=last_target_adjusted_tokens,
+                                val_loader=last_val_loader,
+                                checkpoint_name=checkpoint_name,
+                            )
+                        else:
+                            checkpoint_path = save_checkpoint(
+                                model=model,
+                                tokenizer=tokenizer,
+                                output_dir=output_dir,
+                                checkpoint_name=checkpoint_name,
+                            )
+
+                        stage_finished = True
+                        if checkpoint_path:
+                            last_stage_checkpoint_path = checkpoint_path
+
+                        if would_exceed_global:
+                            logger.info(
+                                f"Final checkpoint saved to {checkpoint_path}"
+                            )
+                            logger.info(f"Training log saved to {log_path}")
+                            return
+
+                        logger.info(
+                            f"Finished stage {stage_name} before exceeding "
+                            f"target {target_adjusted_tokens:.0f}; "
+                            f"current adjusted tokens "
+                            f"{current_adjusted_total:.2f}"
+                        )
+                        break
 
                     outputs = model(**batch)
                     loss = outputs.loss
